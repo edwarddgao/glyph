@@ -154,21 +154,34 @@ def main() -> None:
         print(f"  {'greedy (no lexicon)':<22}{gm['cer']:>8.3f}"
               f"{gm['wacc']:>9.3f}{'-':>9}{'-':>8}")
 
+        curves: dict[int, list[int]] = {}
         for width in args.beam_widths:
             cfg = BeamConfig(beam_width=width, alpha=args.alpha,
                              beta=args.beta, top_k=max(args.top_k, 1))
             t0 = time.time()
-            top1, topk_hit = [], 0
+            top1, ranks = [], []
             for i, item in enumerate(log_probs):
                 hyps = beam_search(item, lexicon, alphabet, cfg)
                 words = [w for w, _ in hyps]
                 top1.append(words[0] if words else greedy[i])
-                if refs[i] in words:
-                    topk_hit += 1
+                ranks.append(words.index(refs[i]) if refs[i] in words else -1)
             dt = time.time() - t0
             bm = decode.score(top1, refs)
+            topk_hit = sum(r >= 0 for r in ranks)
             print(f"  {'beam ' + str(width):<22}{bm['cer']:>8.3f}"
                   f"{bm['wacc']:>9.3f}{topk_hit / len(refs):>9.3f}{dt:>8.1f}")
+            curves[width] = ranks
+
+        # Oracle accuracy if a perfect reranker picked from the n-best list.
+        # This is the exact ceiling on any rescoring layer (context LM etc.).
+        widest = max(curves) if curves else None
+        if widest is not None and args.top_k > 1:
+            ks = [k for k in (1, 2, 4, 8, 16, 32) if k <= args.top_k]
+            ranks = curves[widest]
+            cells = "  ".join(
+                f"@{k}:{sum(0 <= r < k for r in ranks) / len(ranks):.3f}" for k in ks
+            )
+            print(f"  oracle over n-best (beam {widest}):  {cells}")
 
         # What is left after the lexicon has done its work?
         best = top1
