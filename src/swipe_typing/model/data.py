@@ -28,11 +28,14 @@ MAX_WORD_LEN = 24
 class SwipeCorpus:
     """Flat in-memory store of canonical swipes."""
 
-    def __init__(self, x, y, t, offsets, words, aspects):
+    def __init__(self, x, y, t, offsets, words, aspects, sessions=None):
         self.x, self.y, self.t = x, y, t
         self.offsets = offsets
         self.words = words
         self.aspects = aspects
+        #: Donor id per swipe. Needed to group results by user, and to build
+        #: user-disjoint splits.
+        self.sessions = sessions if sessions is not None else [""] * len(words)
 
     def __len__(self) -> int:
         return len(self.words)
@@ -55,7 +58,7 @@ class SwipeCorpus:
                     max_word_len: int = MAX_WORD_LEN,
                     origin: str = "<swipes>") -> "SwipeCorpus":
         letters = set(alphabet)
-        xs, ys, ts, words, aspects = [], [], [], [], []
+        xs, ys, ts, words, aspects, sessions = [], [], [], [], [], []
         offsets = [0]
         for sw in swipes:
             w = sw.word
@@ -66,6 +69,7 @@ class SwipeCorpus:
             ts.append(sw.t)
             words.append(w)
             aspects.append(sw.aspect)
+            sessions.append(sw.session)
             offsets.append(offsets[-1] + len(sw.x))
             if limit and len(words) >= limit:
                 break
@@ -78,6 +82,7 @@ class SwipeCorpus:
             np.asarray(offsets, dtype=np.int64),
             words,
             np.asarray(aspects, dtype=np.float32),
+            sessions,
         )
 
 

@@ -376,6 +376,46 @@ both words, and no lexicon can separate them — only a context language model
 can, which is what FUTO's ContextLM component exists for. That is now the single
 lever that matters; encoder architecture work would buy very little ahead of it.
 
+## The cross-corpus gap: what it is not
+
+How We Swipe scores ~12 points below futo/validation. I tried to close it and
+mostly could not. The negative results are worth recording, because each one
+costs a day to rediscover.
+
+```bash
+python scripts/diagnose_transfer.py --checkpoint runs/full/encoder.pt
+python scripts/finetune_transfer.py --epochs 3
+```
+
+| hypothesis | measurement | verdict |
+|---|---|---|
+| participant population | English level 0.024 spread, finger 0.028, hand 0.026 | no |
+| keyboard geometry | 0.024 across the bulk (19,517 of 20,000 gestures) | no |
+| long tail of bad users | 2 of 275 users below 0.50; median 0.815 | mild |
+| sampling rate | 61 Hz vs 57 Hz; 63 vs 62 points per gesture | no |
+| model input distributions | key affinity ratio 1.01, kinematics 0.85–1.01 | no |
+| sloppier gestures | 62.5% of gestures cover every key of their label, vs FUTO's 60.0% | no — it is *better* |
+| gesture shape | point counts and path lengths match at every word length | no |
+| gesture timing | rescaling to FUTO duration makes it *worse* (0.644 → 0.621) | no |
+| in-domain training data | fine-tuning on 59,721 user-disjoint swipes: **+2.5** | 18% of the gap |
+
+Two traps to avoid repeating. Keyboard aspect first appeared to have a 0.152
+spread and nearly became the story — it is an artifact of 282 gestures in two
+tiny buckets, and the trend *reverses* on FUTO. And gesture timing looked
+compelling (How We Swipe is 26% slower, and five of six kinematic channels are
+velocity-scaled) but a two-minute eval-time rescale refuted it, where a retrain
+would have cost thirty.
+
+The clearest evidence it is intrinsic: fine-tuning on How We Swipe **alone**
+plateaus at a training loss of 0.365, where FUTO reaches 0.17. The model cannot
+*fit* that data, not merely generalize to it, and undiluted in-domain training
+buys only +3.4 points while costing 3.6 on FUTO to forgetting.
+
+**Read How We Swipe as a pessimistic stress test, not a target.** The remaining
+headroom there is the same as everywhere else — 10.6 points of reranking (see
+the oracle n-best curve), which is worth more than anything aimed at the gap
+itself.
+
 ## Layout
 
 ```
@@ -401,6 +441,8 @@ scripts/
   eval_layout_transfer.py score it on layouts it never saw
   error_analysis.py       where the errors are, and what would fix them
   eval_decoder.py         greedy vs trie-constrained beam search
+  diagnose_transfer.py    attribute the cross-corpus gap to subgroups
+  finetune_transfer.py    does in-domain data close it? (user-disjoint split)
 ```
 
 ## Notes
