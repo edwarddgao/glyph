@@ -100,3 +100,53 @@ class Lexicon:
         return Lexicon(
             {w: c for w, c in self._counts.items() if letters.issuperset(w)}
         )
+
+    def counts(self) -> Counter:
+        return Counter(self._counts)
+
+
+#: Pseudo-count assigned to a word with unit frequency, so that general English
+#: frequencies and observed in-domain counts live on a comparable integer scale.
+FREQ_SCALE = 1e9
+
+
+def english_counts(top_n: int = 200_000, alphabet: str | None = None,
+                   scale: float = FREQ_SCALE) -> Counter:
+    """Unigram counts for the ``top_n`` most frequent English words.
+
+    Requires the optional ``wordfreq`` package. Frequencies are turned into
+    pseudo-counts so they can be blended with observed corpus counts.
+    """
+    try:
+        from wordfreq import top_n_list, word_frequency
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise ImportError(
+            "english_counts needs the 'wordfreq' package: pip install wordfreq"
+        ) from exc
+
+    letters = set(alphabet) if alphabet else None
+    counts: Counter[str] = Counter()
+    for word in top_n_list("en", top_n):
+        if not word.isalpha():
+            continue
+        if letters is not None and not letters.issuperset(word):
+            continue
+        counts[word] = max(int(word_frequency(word, "en") * scale), 1)
+    return counts
+
+
+def blended(general: Counter, in_domain: Counter | None = None,
+            in_domain_weight: float = 0.0, smoothing: float = 0.5) -> Lexicon:
+    """Union a general English vocabulary with an in-domain one.
+
+    ``in_domain_weight`` scales observed corpus counts before adding them to the
+    general frequencies. 0 keeps general English frequencies as the prior while
+    still admitting in-domain-only words (which get the smoothing floor); larger
+    values tilt the prior toward what the training corpus actually asked for.
+    """
+    counts = Counter(general)
+    if in_domain:
+        for word, n in in_domain.items():
+            counts[word] = counts.get(word, 0) + int(n * in_domain_weight)
+            counts[word] = max(counts[word], 1)
+    return Lexicon(counts, smoothing=smoothing)

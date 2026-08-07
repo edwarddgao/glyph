@@ -13,6 +13,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.4"]
+# Encoder training. Decoding and the data pipeline need neither.
+train = ["torch>=2.2"]
+# General English vocabulary for the decoder lexicon. Without it, the lexicon
+# falls back to the training corpus vocabulary.
+lexicon = ["wordfreq>=3.0"]
 
 [build-system]
 requires = ["hatchling"]

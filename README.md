@@ -305,33 +305,56 @@ Prefix beam search rather than n-best rescoring because CTC assigns probability
 to *label sequences*, and many alignments collapse to the same string — summing
 over them is the point, and that is what the blank/non-blank split is doing.
 
-The lexicon is the 65,192-word FUTO training vocabulary with observed counts as
-the prior. That imposes a hard ceiling: an evaluation word outside it cannot be
-produced, so the ceiling is reported next to every number.
+### The lexicon sets the ceiling
+
+Whatever is not in the lexicon cannot be produced, so `--lexicon` is switchable
+and the ceiling is reported next to every number. The default blends the FUTO
+training vocabulary with the top ~320k English words by frequency (`wordfreq`).
+
+Measured on 2,000 validation swipes, top-1 word accuracy:
+
+| lexicon | size | futo ceiling | futo | hws ceiling | hws |
+|---|---|---|---|---|---|
+| training vocab | 65k | 97.0% | 91.8% | 88.4% | 74.3% |
+| wordfreq 50k | 48k | 95.5% | 90.1% | 93.1% | 77.4% |
+| wordfreq 200k | 183k | 98.0% | 91.7% | 96.8% | 78.8% |
+| train + wordfreq 320k | 302k | 99.1% | 92.0% | 98.0% | **79.3%** |
+
+Two things worth taking from this. **A larger vocabulary does not degrade
+precision** — I expected 300k words to admit enough confusable candidates to
+cost accuracy, and it doesn't, because the frequency prior absorbs them. And
+**general vocabulary matters far more cross-corpus than in-corpus**: +0.2 points
+on futo/validation, whose own training vocabulary already covered 97% of it,
+versus +5.0 on How We Swipe.
+
+A trap worth recording: the Unix dictionary (`/usr/share/dict/words`) has 236k
+entries but covers only 82.6% of futo/validation — it is an archaic list missing
+common inflections. Size is not coverage.
 
 ### Results (n = 20,000 per split)
 
-**futo/validation** — lexicon ceiling 95.9%
+**futo/validation** — lexicon ceiling 98.8%
 
 | decoder | CER | top-1 | top-4 |
 |---|---|---|---|
 | greedy, no lexicon | 0.070 | 78.4% | — |
-| beam 16 | 0.053 | 89.8% | 93.6% |
-| beam 32 | 0.049 | **90.2%** | **94.1%** |
+| beam 16 | 0.043 | 91.1% | 95.3% |
+| beam 32 | 0.039 | **91.6%** | **96.1%** |
 
-**how_we_swipe** — lexicon ceiling 89.7%
+**how_we_swipe** — lexicon ceiling 98.4%
 
 | decoder | CER | top-1 | top-4 |
 |---|---|---|---|
 | greedy, no lexicon | 0.126 | 64.4% | — |
-| beam 16 | 0.121 | 75.2% | 82.8% |
-| beam 32 | 0.117 | **75.6%** | **83.6%** |
+| beam 16 | 0.098 | 79.7% | 87.1% |
+| beam 32 | 0.094 | **80.2%** | **88.2%** |
 
-The lexicon is worth **+11.8 points** on futo/validation and **+11.2** on How We
-Swipe, confirming the error analysis. Beam 32 reaches 94% of the achievable
-ceiling on futo/validation and 84% on How We Swipe. Decoding runs at roughly
-1,100 swipes/s single-threaded at beam 32 — the trie constraint prunes hard
-enough that this was never the bottleneck I expected.
+Lexicon-constrained decoding is worth **+13.2 points** on futo/validation and
+**+15.8** on How We Swipe. Beam 32 reaches 93% of the achievable ceiling on
+futo/validation and 82% on How We Swipe.
+
+Decoding runs at roughly 1,000 swipes/s single-threaded at beam 32 — the trie
+prunes hard enough that decode speed was never the bottleneck I expected.
 
 `alpha`/`beta` were tuned on 2,000 validation swipes, but the entire grid
 `alpha ∈ [0, 1.6] × beta ∈ [0, 2.0]` spans under one point of accuracy, so
@@ -339,17 +362,19 @@ neither value is load-bearing.
 
 ### What is left
 
-Of the ~1,969 remaining errors on futo/validation:
+Growing the vocabulary largely emptied the out-of-vocabulary bucket — it fell
+from 41.3% of remaining errors to 14.8% on futo/validation, and from 42.4% to
+8.4% on How We Swipe. What remains is almost entirely one thing:
 
-- **41.3% are out-of-vocabulary** — the true word is not in the lexicon, so no
-  decoder configuration can reach it. Growing the vocabulary or handling OOV
-  spelling is the only route.
-- **58.7% are real-word confusions** — `val`→`call`, `has`→`had`, `im`→`in`.
-  The gesture genuinely resembles both. A lexicon cannot separate these; only a
-  context language model can, which is what FUTO's ContextLM component is for.
+| | futo/validation | how_we_swipe |
+|---|---|---|
+| out-of-vocabulary | 14.8% | 8.4% |
+| real-word confusions | **85.2%** | **91.6%** |
 
-Both remaining buckets sit outside the encoder. Further encoder work would buy
-little without first adding vocabulary coverage and a context model.
+`val`→`call`, `has`→`had`, `im`→`in`, `ok`→`on`. The gesture genuinely resembles
+both words, and no lexicon can separate them — only a context language model
+can, which is what FUTO's ContextLM component exists for. That is now the single
+lever that matters; encoder architecture work would buy very little ahead of it.
 
 ## Layout
 

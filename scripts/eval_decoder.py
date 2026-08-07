@@ -4,10 +4,12 @@
 The error analysis said 85% of greedy errors are not words and ~half sit one
 edit from an in-vocabulary word. This measures what a lexicon actually recovers.
 
-The lexicon is the FUTO training vocabulary with observed counts as a unigram
-prior -- the realistic setup, where a keyboard ships with a fixed vocabulary.
-That imposes a hard ceiling: any evaluation word outside the lexicon cannot be
-produced, so the ceiling is reported alongside every number.
+The lexicon is switchable (--lexicon), because it sets a hard ceiling: any
+evaluation word outside it cannot be produced. The ceiling is therefore reported
+alongside every number. The default blends the FUTO training vocabulary with the
+top ~320k English words by frequency; a general vocabulary matters far more
+cross-corpus than in-corpus, since the training vocabulary already covers most
+of its own validation set.
 
 Usage:
     python scripts/eval_decoder.py --checkpoint runs/full/encoder.pt --limit 5000
@@ -35,7 +37,11 @@ from swipe_typing.model import (  # noqa: E402
     make_loader,
 )
 from swipe_typing.model.beam import BeamConfig, beam_search  # noqa: E402
-from swipe_typing.model.lexicon import Lexicon  # noqa: E402
+from swipe_typing.model.lexicon import (  # noqa: E402
+    Lexicon,
+    blended,
+    english_counts,
+)
 
 
 def pick_device(name: str) -> torch.device:
@@ -69,6 +75,32 @@ def run_encoder(model, loader, device, alphabet):
     return np.concatenate(chunks), refs
 
 
+def build_lexicon(spec: str, root: Path, alphabet: str,
+                  in_domain_weight: float) -> Lexicon:
+    """Build a lexicon from a spec like ``train``, ``wf200k``, ``train+wf200k``.
+
+    A bigger vocabulary raises the reachable ceiling but also admits more
+    confusable candidates, so this is deliberately switchable rather than fixed.
+    """
+    from collections import Counter
+
+    parts = spec.split("+")
+    in_domain = None
+    if "train" in parts:
+        in_domain = Counter(SwipeCorpus.load(root / "futo/train", alphabet).words)
+    general: Counter = Counter()
+    for part in parts:
+        if part.startswith("wf"):
+            n = part[2:].rstrip("k")
+            top_n = int(float(n) * 1000) if part.endswith("k") else int(n)
+            general = english_counts(top_n, alphabet=alphabet)
+    if not general:
+        if in_domain is None:
+            raise ValueError(f"empty lexicon spec {spec!r}")
+        return Lexicon(in_domain)
+    return blended(general, in_domain, in_domain_weight=in_domain_weight)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--checkpoint", default="runs/full/encoder.pt")
@@ -78,10 +110,14 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=5000)
     ap.add_argument("--batch-size", type=int, default=256)
     ap.add_argument("--beam-widths", nargs="+", type=int, default=[16])
-    ap.add_argument("--alpha", type=float, default=0.4, help="unigram weight")
-    ap.add_argument("--beta", type=float, default=0.6, help="length bonus")
+    ap.add_argument("--alpha", type=float, default=0.8, help="unigram weight")
+    ap.add_argument("--beta", type=float, default=1.2, help="length bonus")
     ap.add_argument("--top-k", type=int, default=4)
     ap.add_argument("--device", default="auto")
+    ap.add_argument("--lexicon", default="train+wf320k",
+                    help="train | wf<N>k | train+wf<N>k  (wf = wordfreq English)")
+    ap.add_argument("--in-domain-weight", type=float, default=1.0,
+                    help="scale on observed training counts when blending")
     args = ap.parse_args()
 
     device = pick_device(args.device)
@@ -89,9 +125,9 @@ def main() -> None:
     kb = KeyboardLayout.qwerty()
     root = Path(args.cache)
 
-    train_words = SwipeCorpus.load(root / "futo/train", alphabet).words
-    lexicon = Lexicon.from_words(train_words)
-    print(f"lexicon: {len(lexicon):,} words from the training vocabulary\n")
+    lexicon = build_lexicon(args.lexicon, root, alphabet,
+                            args.in_domain_weight)
+    print(f"lexicon '{args.lexicon}': {len(lexicon):,} words\n")
 
     for split in args.splits:
         path = root / split

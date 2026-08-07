@@ -74,6 +74,62 @@ def test_empty_lexicon():
     assert "cat" not in lex
 
 
+# --- vocabulary blending ----------------------------------------------------
+
+def test_blended_unions_vocabularies():
+    from collections import Counter
+
+    from swipe_typing.model.lexicon import blended
+
+    lex = blended(Counter({"the": 1000, "cat": 10}),
+                  Counter({"androscoggin": 3}), in_domain_weight=1.0)
+    assert "the" in lex and "cat" in lex
+    assert "androscoggin" in lex          # in-domain-only word survives
+    assert lex.logp("the") > lex.logp("androscoggin")
+
+
+def test_blended_weight_tilts_prior_toward_in_domain():
+    from collections import Counter
+
+    from swipe_typing.model.lexicon import blended
+
+    general = Counter({"had": 1000, "has": 1000})
+    in_domain = Counter({"has": 5000})
+    flat = blended(general, in_domain, in_domain_weight=0.0)
+    tilted = blended(general, in_domain, in_domain_weight=1.0)
+    assert flat.logp("has") == pytest.approx(flat.logp("had"), abs=1e-9)
+    assert tilted.logp("has") > tilted.logp("had")
+
+
+def test_blended_without_in_domain():
+    from collections import Counter
+
+    from swipe_typing.model.lexicon import blended
+
+    lex = blended(Counter({"cat": 5}))
+    assert "cat" in lex and len(lex) == 1
+
+
+def test_english_counts_shape_and_filtering():
+    pytest.importorskip("wordfreq")
+    from swipe_typing.model.lexicon import english_counts
+
+    counts = english_counts(5_000, alphabet=ALPHABET)
+    assert len(counts) > 1_000
+    assert all(set(ALPHABET).issuperset(w) for w in counts)
+    assert counts["the"] > counts["cat"]      # frequency order preserved
+    assert all(c >= 1 for c in counts.values())
+
+
+def test_english_counts_respects_top_n():
+    pytest.importorskip("wordfreq")
+    from swipe_typing.model.lexicon import english_counts
+
+    assert len(english_counts(1_000, alphabet=ALPHABET)) <= len(
+        english_counts(10_000, alphabet=ALPHABET)
+    )
+
+
 # --- beam search ------------------------------------------------------------
 
 def test_decodes_a_clean_path():
