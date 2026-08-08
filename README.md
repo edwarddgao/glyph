@@ -25,6 +25,50 @@ for sw in cache.read("data/canonical/futo/train"):
     x = features.encode(sw)                   # (64, 8) float32
 ```
 
+## Headline result
+
+Measured once on FUTO's **test** split — 48,711 swipes, 683 donor sessions,
+zero session overlap with train or validation, never downloaded or inspected
+until the configuration was frozen.
+
+| stage | test top-1 | CER |
+|---|---|---|
+| greedy, no lexicon | 78.50% | 0.068 |
+| + trie-constrained beam search | 92.00% | 0.036 |
+| + acoustic rescorer | 92.48% | — |
+| **+ context LM (full stack)** | **93.92%** | — |
+| n-best@8 ceiling | 97.05% | — |
+
+Cross-corpus, no fine-tuning: **80.2%** top-1 on How We Swipe (85k swipes,
+different apparatus, users and year).
+
+Everything runs on a laptop: a 1.32M-parameter encoder trained in ~65 minutes on
+an M-series GPU, plus a 436k rescorer.
+
+### The tuning did not overfit
+
+Every weight in the stack — alpha/beta, lexicon composition, LM weight, rescorer
+weight, beam width, prune threshold — was fitted on the same 20k validation
+slice, roughly a dozen fits in total. Test was held back to price that.
+
+| stage | validation | test | delta | 1 SE |
+|---|---|---|---|---|
+| greedy | 0.7840 | 0.7850 | +0.0010 | 0.0019 |
+| beam top-1 | 0.9186 | 0.9200 | +0.0014 | 0.0012 |
+| top-8 ceiling | 0.9705 | 0.9705 | +0.0000 | 0.0008 |
+| + rescorer | 0.9240 | 0.9248 | +0.0008 | 0.0012 |
+| + rescorer + LM | 0.9381 | 0.9392 | +0.0011 | 0.0011 |
+
+Every stage lands within 1.2 SE, and every delta is *positive*. The prediction
+going in was that the full stack would give back 0.1-0.3 points, since the
+second-pass weights are the most-tuned part; it gained 0.11 instead.
+
+The reason is visible in the earlier sweeps: every tuned surface was flat.
+alpha/beta spanned under one point across the entire grid, the LM weight curve
+was flat from 0.5 to 1.0, and accuracy rose monotonically with lexicon size.
+Flat optima cannot be overfit — there was nothing sharp to latch onto. The
+protocol still mattered, because that is only knowable after checking.
+
 ## Datasets
 
 | source | swipes | words | sessions | lang | license |
