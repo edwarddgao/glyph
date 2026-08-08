@@ -39,17 +39,23 @@ until the configuration was frozen.
 
 | stage | test top-1 | CER |
 |---|---|---|
-| greedy, no lexicon | 78.50% | 0.068 |
-| + trie-constrained beam search | 92.00% | 0.036 |
-| + acoustic rescorer | 92.48% | — |
-| **+ context LM (full stack)** | **93.92%** | — |
-| n-best@8 ceiling | 97.05% | — |
+| greedy, no lexicon | 79.30% | 0.066 |
+| + trie-constrained beam search | 92.40% | 0.033 |
+| + acoustic rescorer | 92.73% | — |
+| **+ context LM (full stack)** | **94.27%** | — |
+| n-best@8 ceiling | 97.50% | — |
 
-Cross-corpus, no fine-tuning: **80.2%** top-1 on How We Swipe (85k swipes,
+Cross-corpus, no fine-tuning: **80.4%** top-1 on How We Swipe (85k swipes,
 different apparatus, users and year).
 
-Everything runs on a laptop: a 1.32M-parameter encoder trained in ~65 minutes on
-an M-series GPU, plus a 436k rescorer.
+Everything runs on a laptop: a 1.32M-parameter encoder trained in ~65 minutes
+on an M-series GPU plus a ~7-minute MMI fine-tune over its own beam's n-best
+lists (#26), and a 436k rescorer.
+
+The test split has now been read twice, once per frozen configuration: the
+original stack (93.92, #19) and this one after the MMI fine-tune (#28). Both
+times every stage landed within ~1 SE of its validation estimate, on the
+positive side.
 
 ### The tuning did not overfit
 
@@ -68,6 +74,11 @@ slice, roughly a dozen fits in total. Test was held back to price that.
 Every stage lands within 1.2 SE, and every delta is *positive*. The prediction
 going in was that the full stack would give back 0.1-0.3 points, since the
 second-pass weights are the most-tuned part; it gained 0.11 instead.
+
+The second freeze (MMI config, #26–28) repeated the pattern exactly:
+first pass 92.31 validation → 92.39 test, full stack 94.10 → 94.27. Two
+configurations, ten stage-level comparisons, all within ~1 SE and all
+positive.
 
 The reason is visible in the earlier sweeps: every tuned surface was flat.
 alpha/beta spanned under one point across the entire grid, the LM weight curve
@@ -290,9 +301,44 @@ drops to 43-50%. Well above collapse, well below parity. dvorak is weakest at
 35.1%.
 
 So layout-agnosticism holds strongly for the permutation case and partially for
-the geometry case. Closing the geometry gap most likely means training on mixed
-row counts — augmentation currently varies scale and shear but never the number
-of rows, so the model has no reason to have learned that invariance.
+the geometry case — *at the encoder level*. The next table is why that
+qualifier matters.
+
+### Layout transfer with the lexicon on
+
+The table above is lexicon-free greedy, which isolates the encoder but is not
+what anything ships. `eval_layout_beam.py` runs the same held-out layouts
+through the real first pass — trie-constrained beam + blended lexicon.
+Measured on the 20-epoch encoder (whose greedy numbers differ slightly from
+the 10-epoch table above):
+
+| layout | grid | n | greedy | beam 100 top-1 | n-best hit@8 |
+|---|---|---|---|---|---|
+| qwerty (swipe-5) | 3x10 | 28,267 | 72.8% | 84.3% | 90.1% |
+| qwertz | 3x10 | 801 | 68.0% | 86.1% | 94.1% |
+| clearflow | 5x6 | 11,677 | 49.0% | **83.4%** | 93.8% |
+| kasroz | 5x6 | 1,058 | 53.5% | **84.0%** | 94.7% |
+| dvorak | 4x10 | 2,809 | 40.4% | 79.4% | 90.6% |
+
+**The 20–30 point "geometry gap" was mostly a decode-mode artifact.** With the
+trie on, clearflow lands 0.9 points *below* same-corpus qwerty and kasroz 0.3
+below — versus 20+ at greedy. The encoder's logits on 5-row grids are noisier,
+but the information survives and the search recovers it; clearflow and kasroz
+even have *higher* n-best hit rates than swipe-5 qwerty. The earlier hypothesis
+that closing the gap needs mixed-row-count training is therefore mostly moot.
+What remains real: dvorak (−4.9), and the fact that the swipe-5 corpus as a
+whole runs ~8 points below futo/validation (84.3 vs 92.1 at matched decode) —
+different donation task, different donors. The right baseline for a transfer
+claim is swipe-5 qwerty, not futo/validation; comparing across that line
+conflates corpus shift with layout effect.
+
+For calibration: the FUTO paper reports 96.84% on clearflow and 97.68% on
+kasroz (beam 100, 162k AOSP wordlist *extended with the evaluation targets*).
+Their clearflow number sits *above* their own qwerty test figure (92.94%), so
+those donors swipe cleanly; relative to corpus, their transfer penalty and
+ours are comparable. The absolute gap is *not* encoder quality — measured
+head-to-head under matched decoding, their released encoder trails ours
+(#25) — it is their scoring form and wordlist protocol.
 
 ### Error analysis
 
@@ -743,7 +789,7 @@ commit messages.
 |---|---|---|---|
 | 1 | canonical space + cross-corpus alignment | corpora agree to 0.124 key half-widths | `validate_alignment.py` |
 | 2 | CTC encoder, 10 epochs | 78.4% greedy / CER 0.070 (val) | `train_encoder.py` |
-| 3 | layout transfer | permutation ~free (qwertz −1.6); unseen 5-row grids cost 20-30 pts | `eval_layout_transfer.py` |
+| 3 | layout transfer | permutation ~free (qwertz −1.6); unseen 5-row grids cost 20-30 pts *at greedy* — but see #22 | `eval_layout_transfer.py` |
 | 4 | error analysis | 85% of greedy errors are non-words → decode, not encoder | `error_analysis.py` |
 | 5 | trie beam search | +13.2 over greedy | `eval_decoder.py` |
 | 6 | lexicon 65k → 320k | OOV errors 41% → 15%; big lexicons don't hurt precision | `eval_decoder.py --lexicon` |
@@ -760,6 +806,15 @@ commit messages.
 | 17 | encoder 10 → 20 epochs | +1.7 greedy, but lexicon absorbs ~10× → +0.18 beam (noise on futo) | commit `da6b142` |
 | 18 | rescorer behind 20-epoch encoder | first-pass gains absorbed **twice**; compound only where encoder is the bottleneck (hws +0.88) | commit `3098170` |
 | 19 | held-out test split, frozen config | **93.92%** top-1; every stage within 1.2 SE of validation — no tuning overfit | commit `a3909bb` |
+| 20 | beam 64 → 128 | @8 ceiling 97.05 → 97.29 (val); truth is in the 128 surviving beams 97.9% of the time, so ~0.5 pt is top-8 *truncation*, not search | `eval_decoder.py --beam-widths 128` |
+| 21 | full stack on beam-128 lists | **wash** — 93.85 vs 93.81 val; the stack converts ~17% of the extra ceiling and absorbs the rest, same pattern as #17/#18. Config stays beam 64 | `eval_full_stack.py` |
+| 22 | layout transfer with the trie | the 5-row "geometry gap" was a decode-mode artifact: clearflow 49.0 → 83.4, within 0.9 of same-corpus qwerty; mixed-row-count training (#3's proposed fix) mostly moot | `eval_layout_beam.py` |
+| 23 | length-normalized beam scoring | **null** — `a/len^γ` never beats the tuned `a + α·lp + β·len` at any k; the FUTO paper's better n-best ordering is list quality, not scoring family. α/β at beam 128 re-tune to within noise, still flat | scratch sweep over `beam_candidates()` |
+| 24 | top-8 → top-16 lists, rescorer retrained to match | ceiling 97.29 → 97.68, stack converts 33% of headroom *exactly as at k8* — 93.95 vs 93.85, under 1 SE. The absorption ratio is invariant to list depth; decode side closed | `runs/rescorer128k16/` |
+| 25 | head-to-head vs the released FUTO Swipe Model encoder (`honorable_sturgeon`, 635k, ExecuTorch) | same 20k swipes, same lexicon, same beam, α/β tuned per encoder: theirs 90.1 top-1 / 95.6 truth-in-beam vs ours 92.1 / 97.9. Their published 92.94 is their *decode stack* (γ/λ scoring their emissions are shaped for — greedy collapses to 48.2 — plus the eval-target-extended wordlist), not an encoder edge. Their efficiency stands: half the params, 844 swipes/s on one CPU thread | scratch, weights not redistributed |
+| 26 | MMI fine-tune — train the emissions for the search (#25's mechanism, ported) | **+0.29 through the full stack** (93.81 → 94.10 val), from one epoch over the beam's own top-16 lists at LR 5e-5. First pass 92.0 → 92.3, @8 ceiling 97.05 → 97.41, hws zero-shot 80.5 → 80.7, greedy 80.1 → 79.0 *by design* — the same weak-greedy/strong-search signature the FUTO encoder shows. Zero inference cost. Rerun with a different dropout seed reproduces within ±0.05 everywhere | `train_mmi.py`, `runs/mmi/` |
+| 27 | MMI round 2, on-policy (fresh lists from the fine-tuned encoder) | **null** — beam 64 92.4 vs 92.3, identical oracle curve; one round captures the gain. Consistent with the round-2 lists containing 40% fewer truth-missing swipes: the teachable discrimination was taught | `runs/mmi2/` |
+| 28 | second test freeze: MMI config, measured once | **94.27%** top-1 (greedy 79.30, beam 92.40, +rescorer 92.73, ceiling 97.50); hws full 85k 80.4. Every stage within ~1 SE of validation, positive, same as #19 | headline table |
 
 Standing conclusions the log supports:
 
@@ -771,6 +826,20 @@ Standing conclusions the log supports:
   slice did not overfit (#15, #19).
 - The encoder is too overconfident to ensemble (#16) — calibration, not
   capacity, is its open problem.
+- As of #20–24 the decode side is closed: width, pruning, scoring family,
+  lexicon size, list depth, and both second-pass weights are all measured,
+  and every one either sits at a flat optimum or is absorbed on the way up.
+  The second pass converts ~33% of whatever headroom it is given, regardless
+  of where the headroom comes from (#12, #21, #24) — so feeding it more list
+  is not a lever, and the only remaining one is making the *first pass*
+  right more often: the encoder, whose known defects (OOV words, doubled
+  letters, overconfidence) are structural to CTC+trie rather than tunable.
+- The first encoder lever tried confirmed this reading: MMI fine-tuning over
+  the beam's own n-best lists (#26) is the one change all session that moved
+  every stage at once — first pass, ceiling, and full stack — because it
+  improves what the encoder says rather than how the pipeline reads it. It
+  also replicates #25's diagnosis in our own weights: emissions trained for
+  the search stop being greedy-readable, and that trade is worth points.
 
 ## Layout
 
@@ -794,7 +863,9 @@ scripts/
   calibrate_layout.py     recover keyboard geometry from touch data
   validate_alignment.py   check the corpora share one coordinate space
   train_encoder.py        train the encoder
-  eval_layout_transfer.py score it on layouts it never saw
+  eval_layout_transfer.py score it on layouts it never saw (greedy, no lexicon)
+  eval_layout_beam.py     same layouts through the trie beam — the deployed view
+  train_mmi.py            discriminative fine-tune over the beam's own n-best
   error_analysis.py       where the errors are, and what would fix them
   eval_decoder.py         greedy vs trie-constrained beam search
   diagnose_transfer.py    attribute the cross-corpus gap to subgroups
