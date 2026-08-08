@@ -376,6 +376,41 @@ both words, and no lexicon can separate them — only a context language model
 can, which is what FUTO's ContextLM component exists for. That is now the single
 lever that matters; encoder architecture work would buy very little ahead of it.
 
+## Encoder gains do not survive the lexicon
+
+The 10-epoch schedule was cutting training short: training loss was still
+falling monotonically when cosine annealing ended. A 20-epoch run with the
+identical config confirms it — and then shows why it barely matters.
+
+```bash
+python scripts/train_encoder.py --d-model 128 --dilations 1,2,4,8,1,2,4,8 --epochs 20
+```
+
+| | 10 epochs | 20 epochs | delta | |
+|---|---|---|---|---|
+| futo/val, greedy (no lexicon) | 0.7840 | 0.8010 | **+1.70** | 6.0 SE |
+| futo/val, **beam 64 + lexicon** | 0.9186 | 0.9204 | +0.18 | 0.9 SE — noise |
+| how_we_swipe, greedy | 0.6440 | 0.6590 | **+1.50** | 4.5 SE |
+| how_we_swipe, **beam 64 + lexicon** | 0.8020 | 0.8090 | +0.70 | 2.5 SE |
+| futo/val top-8 ceiling | 0.9705 | 0.9700 | −0.05 | unchanged |
+
+**A 1.7-point encoder gain becomes 0.18 points once the lexicon is applied — a
+~10x attenuation — and the n-best ceiling does not move at all.** The lexicon
+was already repairing exactly the errors a better-trained encoder fixes: both
+turn malformed spellings into real words. What survives the lexicon is
+real-word confusions, and those are not what more encoder training addresses.
+
+Two consequences worth carrying:
+
+- **Never evaluate encoder changes lexicon-free.** Greedy CER is the natural
+  metric while training and it overstates end-to-end value by an order of
+  magnitude here. Every encoder-side experiment should be judged after the
+  decoder.
+- **The attenuation is weaker where the encoder is genuinely the bottleneck.**
+  How We Swipe keeps +0.70 of its +1.50, against futo/validation keeping +0.18
+  of +1.70 — consistent with its much larger "in lexicon but never in n-best"
+  bucket (7.6% vs 1.9%).
+
 ## Context reranking
 
 ```bash
