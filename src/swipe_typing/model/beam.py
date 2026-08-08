@@ -75,6 +75,20 @@ class _Beam:
         return _logaddexp(self.p_blank, self.p_nonblank)
 
 
+def beam_candidates(log_probs: np.ndarray, lexicon: Lexicon, alphabet: str,
+                    cfg: BeamConfig | None = None
+                    ) -> list[tuple[str, float, float, int]]:
+    """Surviving word-terminal beams as ``(word, acoustic, unigram_logp, length)``.
+
+    ``alpha`` and ``beta`` are applied only when *ranking* the finished beams --
+    they never influence which beams survive the search, which is driven by
+    ``beam.total`` alone. Exposing the raw components therefore lets those two
+    weights be swept without re-running the search, turning an hour-long grid
+    into a second.
+    """
+    return _search(log_probs, lexicon, alphabet, cfg or BeamConfig())
+
+
 def beam_search(log_probs: np.ndarray, lexicon: Lexicon, alphabet: str,
                 cfg: BeamConfig | None = None) -> list[tuple[str, float]]:
     """Decode one utterance.
@@ -87,6 +101,14 @@ def beam_search(log_probs: np.ndarray, lexicon: Lexicon, alphabet: str,
         lexicon admits nothing -- callers should fall back to greedy.
     """
     cfg = cfg or BeamConfig()
+    scored = [(w, a + cfg.alpha * lp + cfg.beta * n)
+              for w, a, lp, n in _search(log_probs, lexicon, alphabet, cfg)]
+    scored.sort(key=lambda kv: kv[1], reverse=True)
+    return scored[:cfg.top_k]
+
+
+def _search(log_probs: np.ndarray, lexicon: Lexicon, alphabet: str,
+            cfg: BeamConfig) -> list[tuple[str, float, float, int]]:
     log_probs = np.asarray(log_probs, dtype=np.float64)
     n_labels = len(alphabet)
     blank = n_labels
@@ -144,7 +166,7 @@ def beam_search(log_probs: np.ndarray, lexicon: Lexicon, alphabet: str,
             [:cfg.beam_width]
         )
 
-    scored: list[tuple[str, float]] = []
+    out: list[tuple[str, float, float, int]] = []
     for prefix, beam in beams.items():
         if not prefix or not beam.node.is_word:
             continue
@@ -158,11 +180,8 @@ def beam_search(log_probs: np.ndarray, lexicon: Lexicon, alphabet: str,
         total = beam.total
         if total == NEG_INF or total != total:
             continue
-        score = total + cfg.alpha * beam.node.logp + cfg.beta * len(prefix)
-        scored.append((prefix, score))
-
-    scored.sort(key=lambda kv: kv[1], reverse=True)
-    return scored[:cfg.top_k]
+        out.append((prefix, total, beam.node.logp, len(prefix)))
+    return out
 
 
 def decode_batch(log_probs: np.ndarray, lexicon: Lexicon, alphabet: str,
