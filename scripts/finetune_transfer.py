@@ -100,6 +100,14 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--eval-batches", type=int, default=40)
     ap.add_argument("--device", default="auto")
+    ap.add_argument("--from-scratch", action="store_true",
+                    help="fresh weights (same architecture as the checkpoint) "
+                         "instead of fine-tuning -- for matched-size "
+                         "in-domain-vs-in-domain comparisons")
+    ap.add_argument("--train-on", default="hws", choices=["hws", "futo"],
+                    help="which corpus supplies the in-domain training set")
+    ap.add_argument("--train-limit", type=int, default=None,
+                    help="cap the in-domain training set (to match corpus sizes)")
     args = ap.parse_args()
 
     device = pick_device(args.device)
@@ -132,8 +140,16 @@ def main() -> None:
         return SwipeDataset(corpus, kb, augment_cfg=DEFAULT_AUG if augment else None,
                             resample_mode=mode, key_units=key_units)
 
-    parts = [make(hws_train, True)]
-    if futo_train is not None:
+    if args.train_on == "futo":
+        in_domain = SwipeCorpus.load(root / "futo/train", alphabet,
+                                     limit=args.train_limit or len(hws_train))
+        print(f"training on futo subset: {len(in_domain):,} swipes")
+    else:
+        in_domain = hws_train
+        if args.train_limit:
+            raise SystemExit("--train-limit only applies to --train-on futo")
+    parts = [make(in_domain, True)]
+    if futo_train is not None and args.train_on == "hws":
         parts.insert(0, make(futo_train, True))
     train_ds = ConcatDataset(parts)
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
@@ -143,6 +159,15 @@ def main() -> None:
                                   shuffle=False, num_workers=2)
     futo_val_loader = make_loader(make(futo_val, False), batch_size=args.batch_size,
                                   shuffle=False, num_workers=2)
+
+    if args.from_scratch:
+        from swipe_typing.model import SwipeEncoder
+        from swipe_typing.model.encoder import fit_normalization
+        model = SwipeEncoder(model.cfg).to(device)
+        print(f"fresh model, {model.num_parameters():,} params; "
+              "fitting normalization...")
+        fit_normalization(model, train_loader)
+        model.to(device)
 
     base_hws = greedy_eval(model, hws_test_loader, device, alphabet,
                            args.eval_batches)

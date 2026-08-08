@@ -376,6 +376,247 @@ both words, and no lexicon can separate them — only a context language model
 can, which is what FUTO's ContextLM component exists for. That is now the single
 lever that matters; encoder architecture work would buy very little ahead of it.
 
+## The cross-corpus gap
+
+How We Swipe scores ~12 points below futo/validation. Two rounds of
+investigation went into this — the second one overturned parts of the first, so
+both the evidence and the corrections are recorded.
+
+```bash
+python scripts/diagnose_transfer.py --checkpoint runs/full/encoder.pt
+python scripts/finetune_transfer.py --epochs 3                      # fine-tune
+python scripts/finetune_transfer.py --from-scratch --train-on hws \
+    --futo-limit 0 --epochs 25 --lr 3e-3                            # matched-size
+```
+
+### What it is not
+
+| hypothesis | measurement | verdict |
+|---|---|---|
+| participant population | English level 0.024 spread, finger 0.028, hand 0.026 | no |
+| keyboard geometry | affine sweep on eval coords peaks at identity (0.6345 vs best 0.6347) | no |
+| long tail of bad users | 2 of 275 users below 0.50; median 0.815 | mild |
+| sampling rate | 61 Hz vs 57 Hz; 63 vs 62 points per gesture | no |
+| model input distributions | key affinity ratio 1.01, kinematics 0.85–1.01 | no |
+| sloppier gestures | 62.5% of gestures cover every key of their label, vs FUTO's 60.0% | no — *better* |
+| dwell-driven sample starvation | time-uniform resampling yields 42.5 vs 42.4 effective points | no |
+| inter-user heterogeneity | cross-user shape distance ratio 1.09 (arc-length, timing removed) | mild |
+
+Two corrections from the first round, worth recording because both mistakes are
+easy to repeat:
+
+- The original "timing" refutation (globally rescaling `t`) was a **null test**:
+  time-uniform resampling is invariant to affine time rescaling, so it only
+  perturbed velocity magnitudes. The real timing channel — dwells eating the 64
+  time-uniform samples and starving transit segments — was untested. Measured
+  properly, it is also innocent: both corpora allocate ~42.5 effective points to
+  the path.
+- "The model cannot fit this data" (fine-tune loss plateauing at 0.365) was an
+  artifact of the fine-tuning schedule. Trained from scratch, the model fits How
+  We Swipe to a loss of 0.15 without difficulty. The fit was never the problem —
+  generalization to *new users of that corpus* is.
+
+### What it is: the matched-size experiment
+
+Train the same architecture from scratch on ~60k swipes of each corpus and
+evaluate in-domain on held-out users (greedy):
+
+| trained on | users in train | in-domain accuracy | other corpus |
+|---|---|---|---|
+| FUTO 60k | 655 | **67.3%** (futo/val) | 51.9% |
+| How We Swipe 60k | 926 | **61.8%** (held-out users) | 54.9% |
+
+In-domain versus in-domain, at matched sample count, with *more* users on its
+side, How We Swipe is **5.5 points harder**. That is intrinsic corpus
+difficulty, established by construction rather than inference — consistent with
+its collection protocol (a timed typing test, versus FUTO's relaxed donation
+task). Notably, our full FUTO model already beats the 60k in-domain model on How
+We Swipe zero-shot (64.4 vs 61.8).
+
+### What is recoverable
+
+| lever | held-out HWS users, beam top-1 | n-best hit |
+|---|---|---|
+| zero-shot, beam 32 / prune −9 | 80.0% | 90.7% |
+| + wider search (beam 64 / prune −13) | 80.5% | 92.7% |
+| + fine-tune on 59.7k user-disjoint HWS swipes | **82.6%** | **93.2%** |
+
+Two practical findings:
+
+- **A third of the "encoder never surfaces the word" bucket was beam pruning.**
+  Widening to beam 64 / prune −13 lifts the n-best hit from 90.4% to 92.6% (beam
+  128: 93.7%) at ~7 ms/word single-threaded — still realtime. This raises the
+  reranker ceiling on How We Swipe accordingly.
+- Fine-tuning with FUTO mixed in adds +2.1 beam points on held-out users while
+  costing only 0.5 on futo/validation.
+
+**Bottom line:** of the ~12-point gap, roughly 2.6 points are recoverable with
+in-domain data plus wider search, ~5.5 points are intrinsic by direct
+measurement, and the remainder is the two corpora scaling differently. Read How
+We Swipe as a pessimistic stress test; the reranking headroom (top-1 82.6 vs
+n-best 93.2) remains the largest lever there, as everywhere.
+
+## Layout transfer
+
+`eval_layout_transfer.py` on the same checkpoint, against real English gestures
+performed on layouts absent from training:
+
+| layout | grid | n | CER | word acc |
+|---|---|---|---|---|
+| qwerty | 3x10 | 28,267 | 0.140 | 71.1% |
+| qwertz | 3x10 | 801 | 0.118 | **69.5%** |
+| clearflow | 5x6 | 11,677 | 0.165 | 49.5% |
+| kasroz | 5x6 | 1,058 | 0.185 | 43.0% |
+| dvorak | 4x10 | 2,809 | 0.215 | 35.1% |
+
+Two distinct findings, and they should not be blurred together:
+
+**Letter permutation is essentially free.** qwertz keeps QWERTY's geometry and
+moves the letters; the model loses 1.6 points against qwerty (69.5% vs 71.1%)
+having never trained on it. It is not reading letter positions it memorized.
+
+**Unseen grid geometry costs real accuracy but does not break the model.**
+clearflow and kasroz are 5-row grids; the encoder only ever saw 3 rows, and
+drops to 43-50%. Well above collapse, well below parity. dvorak is weakest at
+35.1%.
+
+So layout-agnosticism holds strongly for the permutation case and partially for
+the geometry case. Closing the geometry gap most likely means training on mixed
+row counts — augmentation currently varies scale and shear but never the number
+of rows, so the model has no reason to have learned that invariance.
+
+### Error analysis
+
+```bash
+python scripts/error_analysis.py --checkpoint runs/full/encoder.pt
+```
+
+Of the 4,320 errors on futo/validation:
+
+| | share of errors | implication |
+|---|---|---|
+| prediction is not a real word | 84.7% | a lexicon rejects it outright |
+| true word in-vocab and 1 edit away | 52.5% | lexicon + beam very likely recovers |
+| predicted a *different* real word | 15.3% | needs a language model, not a lexicon |
+| true word absent from the lexicon | 12.8% | a lexicon cannot help |
+
+**The encoder is not the bottleneck for QWERTY accuracy — decoding is.** Roughly
+half the remaining error is one edit from an in-vocabulary word, and 85% of
+predictions aren't words at all. The 78.4% figure is what a lexicon-free decode
+buys; almost no shipping keyboard decodes that way.
+
+Two more findings worth having:
+
+**Short words are not the problem.** Length ≤3 accounts for only 6.6% of errors,
+and 2–3 letter words run 94–98% accurate. Errors concentrate at length 6–10
+(62% of them). The `im` → `in` sample that suggested otherwise was unrepresentative.
+
+**78% of substitutions are between physically adjacent keys** — `i`↔`o`, `r`↔`t`,
+`s`↔`d`, all at exactly 1.0 key-widths. The gesture genuinely passes near both;
+this is spatial ambiguity, not a model defect, and it is precisely what a
+lexicon disambiguates.
+
+**Doubled letters look like an encoder defect but mostly aren't.** Words
+containing a repeat score 48.8% against 81.7% without — a 33-point gap. CTC
+needs a blank frame between the two identical labels, but the gesture for
+"hello" traces h-e-l-o exactly like "helo": there is no geometric signal
+separating them, only dwell duration. This is intrinsic ambiguity in shape
+writing, and the lexicon is what resolves it.
+
+**Out-of-vocabulary words are the genuine encoder weakness**: 31.8% versus 80.4%
+on in-vocabulary words. These are also the cases where a lexicon *cannot* help,
+so this is where encoder work would actually pay.
+
+The picture holds cross-corpus. On How We Swipe: 78.8% non-words, 45.1%
+in-vocab-and-one-edit, doubled letters 44.2% vs 67.3%.
+
+## The decoder
+
+```bash
+python scripts/eval_decoder.py --checkpoint runs/full/encoder.pt --limit 20000
+```
+
+Trie-constrained CTC prefix beam search (`model/beam.py`). Standard prefix beam
+search with two changes: a prefix may only be extended by a character the
+lexicon trie allows, so a non-word can never be emitted; and only prefixes on a
+word-terminal node may finish, scored with a unigram prior (`alpha`) and a
+length bonus (`beta`).
+
+Prefix beam search rather than n-best rescoring because CTC assigns probability
+to *label sequences*, and many alignments collapse to the same string — summing
+over them is the point, and that is what the blank/non-blank split is doing.
+
+### The lexicon sets the ceiling
+
+Whatever is not in the lexicon cannot be produced, so `--lexicon` is switchable
+and the ceiling is reported next to every number. The default blends the FUTO
+training vocabulary with the top ~320k English words by frequency (`wordfreq`).
+
+Measured on 2,000 validation swipes, top-1 word accuracy:
+
+| lexicon | size | futo ceiling | futo | hws ceiling | hws |
+|---|---|---|---|---|---|
+| training vocab | 65k | 97.0% | 91.8% | 88.4% | 74.3% |
+| wordfreq 50k | 48k | 95.5% | 90.1% | 93.1% | 77.4% |
+| wordfreq 200k | 183k | 98.0% | 91.7% | 96.8% | 78.8% |
+| train + wordfreq 320k | 302k | 99.1% | 92.0% | 98.0% | **79.3%** |
+
+Two things worth taking from this. **A larger vocabulary does not degrade
+precision** — I expected 300k words to admit enough confusable candidates to
+cost accuracy, and it doesn't, because the frequency prior absorbs them. And
+**general vocabulary matters far more cross-corpus than in-corpus**: +0.2 points
+on futo/validation, whose own training vocabulary already covered 97% of it,
+versus +5.0 on How We Swipe.
+
+A trap worth recording: the Unix dictionary (`/usr/share/dict/words`) has 236k
+entries but covers only 82.6% of futo/validation — it is an archaic list missing
+common inflections. Size is not coverage.
+
+### Results (n = 20,000 per split)
+
+**futo/validation** — lexicon ceiling 98.8%
+
+| decoder | CER | top-1 | top-4 |
+|---|---|---|---|
+| greedy, no lexicon | 0.070 | 78.4% | — |
+| beam 16 | 0.043 | 91.1% | 95.3% |
+| beam 32 | 0.039 | **91.6%** | **96.1%** |
+
+**how_we_swipe** — lexicon ceiling 98.4%
+
+| decoder | CER | top-1 | top-4 |
+|---|---|---|---|
+| greedy, no lexicon | 0.126 | 64.4% | — |
+| beam 16 | 0.098 | 79.7% | 87.1% |
+| beam 32 | 0.094 | **80.2%** | **88.2%** |
+
+Lexicon-constrained decoding is worth **+13.2 points** on futo/validation and
+**+15.8** on How We Swipe. Beam 32 reaches 93% of the achievable ceiling on
+futo/validation and 82% on How We Swipe.
+
+Decoding runs at roughly 1,000 swipes/s single-threaded at beam 32 — the trie
+prunes hard enough that decode speed was never the bottleneck I expected.
+
+`alpha`/`beta` were tuned on 2,000 validation swipes, but the entire grid
+`alpha ∈ [0, 1.6] × beta ∈ [0, 2.0]` spans under one point of accuracy, so
+neither value is load-bearing.
+
+### What is left
+
+Growing the vocabulary largely emptied the out-of-vocabulary bucket — it fell
+from 41.3% of remaining errors to 14.8% on futo/validation, and from 42.4% to
+8.4% on How We Swipe. What remains is almost entirely one thing:
+
+| | futo/validation | how_we_swipe |
+|---|---|---|
+| out-of-vocabulary | 14.8% | 8.4% |
+| real-word confusions | **85.2%** | **91.6%** |
+
+`val`→`call`, `has`→`had`, `im`→`in`, `ok`→`on`. The gesture genuinely resembles
+both words, and no lexicon can separate them — only a context language model
+can, which is what FUTO's ContextLM component exists for. That is now the single
+lever that matters; encoder architecture work would buy very little ahead of it.
+
 ## The cross-corpus gap: what it is not
 
 How We Swipe scores ~12 points below futo/validation. I tried to close it and
