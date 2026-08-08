@@ -148,7 +148,17 @@ def beam_search(log_probs: np.ndarray, lexicon: Lexicon, alphabet: str,
     for prefix, beam in beams.items():
         if not prefix or not beam.node.is_word:
             continue
-        score = beam.total + cfg.alpha * beam.node.logp + cfg.beta * len(prefix)
+        # A beam can reach zero probability: extending by a *repeated* letter
+        # draws on p_blank, which stays -inf for a prefix that has never ended
+        # in a blank, so both fields can be -inf. Such a candidate is impossible
+        # rather than merely unlikely, and emitting it hands downstream
+        # consumers a -inf score. Rare (33 of 1.2M slots on futo/train) and
+        # always on low-ranked repeats like "ayyy", but it NaNs any model that
+        # takes these scores as a feature.
+        total = beam.total
+        if total == NEG_INF or total != total:
+            continue
+        score = total + cfg.alpha * beam.node.logp + cfg.beta * len(prefix)
         scored.append((prefix, score))
 
     scored.sort(key=lambda kv: kv[1], reverse=True)

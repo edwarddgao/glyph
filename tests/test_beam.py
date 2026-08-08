@@ -346,3 +346,23 @@ def test_lm_coverage():
     assert lm.coverage([("i", "am")]) == 1.0
     assert lm.coverage([("zebra", "quux")]) == 0.0
     assert lm.coverage([]) == 0.0
+
+
+def test_never_emits_a_zero_probability_candidate():
+    """Extending by a repeated letter draws on p_blank, which is -inf for a
+    prefix that has never ended in a blank. Such beams are impossible, not
+    merely unlikely, and a -inf score NaNs any downstream model that consumes
+    it as a feature."""
+    lex = Lexicon.from_words(["ay", "ayy", "ayyy", "by"])
+    lp = frames(["b", "y"], confidence=0.6)
+    for w, s in beam_search(lp, lex, ALPHABET, BeamConfig(top_k=8)):
+        assert math.isfinite(s), f"{w} scored {s}"
+
+
+def test_all_scores_finite_across_random_inputs():
+    rng = np.random.default_rng(0)
+    lex = Lexicon.from_words(["aa", "aaa", "ab", "abb", "abbb", "ba", "b"])
+    for _ in range(40):
+        lp = np.log(rng.dirichlet(np.ones(BLANK + 1), size=12))
+        for _, s in beam_search(lp, lex, ALPHABET, BeamConfig(top_k=8)):
+            assert math.isfinite(s)
