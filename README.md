@@ -460,6 +460,66 @@ weight 0.8, raw `log P(w|ctx)` gives 0.9248 against delta's 0.9386. Decoded
 context costs 0.26 points versus oracle, partly error propagation and partly
 because decoded text is lowercase, which is out of distribution for GPT-2.
 
+## Second-pass acoustic rescoring
+
+```bash
+python scripts/dump_nbest.py --split futo/train --limit 150000
+python scripts/dump_nbest.py --split futo/validation --limit 20000
+python scripts/train_rescorer.py --epochs 8
+python scripts/eval_full_stack.py --rescorer runs/rescorer/rescorer.pt
+```
+
+Since ~73% of the headroom is acoustic, a 436k-param rescorer scores whole
+(gesture, candidate) pairs: each candidate letter carries its key position and
+cross-attends to the full trajectory, modelling the frame dependencies CTC gives
+up. It learns a **residual** — the logit is `scale · first_pass + model(...)`
+with `scale` initialised to 1 — so it starts from the existing ranking and only
+has to fix what the first pass gets wrong.
+
+### The two second-pass signals stack
+
+futo/validation, n = 20,000, beam 64 top-8:
+
+| | lm=0.0 | lm=0.8 |
+|---|---|---|
+| rescorer=0.0 | 0.9186 | 0.9343 |
+| rescorer=1.0 | 0.9240 | **0.9381** |
+
+Alone: rescorer +0.54, LM +1.57. Together **+1.95 — 37% of the available
+headroom**, close to additive, confirming they fix different errors. With
+*decoded* rather than oracle context the streaming figure is ≈0.9355.
+
+### Two negative results worth keeping
+
+**The rescorer is not capacity-limited.** Going 96→160 d_model and 8→18 epochs
+gives exactly the same validation accuracy (0.9245) while training loss falls
+0.164→0.125 — it overfits rather than underfits.
+
+**And the obvious fix for that made things worse.** Training n-best lists come
+from the encoder's own training data, where first-pass top-1 is 0.9398 against
+0.9186 on validation, so the rescorer learns to correct a first pass stronger
+than the one it meets at test time. Retraining on swipe-2/3/4 — 111k swipes the
+encoder has genuinely never seen — scored *worse*: 0.9211 (4.6% of headroom)
+versus 0.9245 (11.3%). Those batches are much harder (first-pass 0.7945), and
+that distribution shift outweighs the overconfidence it was meant to remove. A
+proper fix needs held-out folds of the *same* distribution, not a different
+corpus slice.
+
+### A zero-probability bug the rescorer exposed
+
+The first training run was all-NaN and reported "0.0% of headroom recovered" — a
+plausible-looking negative result that was pure artifact. The cause was a real
+bug in `beam_search`: extending a beam by a *repeated* letter draws on
+`p_blank`, which stays `-inf` for a prefix that has never ended in a blank, so
+both probability fields can be `-inf`. Those candidates are impossible rather
+than unlikely, and were being emitted anyway.
+
+It is invisible during decoding — such candidates lose regardless — and appeared
+in only 33 of 1.2M slots, always on low-ranked repeats like `"ayyy"`, never on
+the true word. It only surfaced once a downstream model consumed the scores as
+features, where one `-inf` silently NaNs an entire run. Now filtered at source,
+with a regression test and a loud assert in the loader.
+
 ### A trap: judge corpora by swipes, not by unique sentences
 
 Sampling unique sentence strings suggested How We Swipe was 93% random word
