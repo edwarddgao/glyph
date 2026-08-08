@@ -7,11 +7,17 @@ record type, so a model trained on one corpus can be evaluated on another.
 ## Quickstart
 
 ```bash
-uv venv && uv pip install -e ".[dev]"
+uv venv && uv pip install -e ".[dev,train,lexicon]"
 
+# data
 python scripts/fetch_how_we_swipe.py          # ~70MB from OSF, expands to ~920MB
 python scripts/build_cache.py                 # normalize everything -> Parquet
 python scripts/validate_alignment.py          # confirm the corpora agree
+
+# model (each section below documents its own script)
+python scripts/train_encoder.py --d-model 128 --dilations 1,2,4,8,1,2,4,8 --epochs 10
+python scripts/eval_decoder.py --limit 20000
+
 pytest
 ```
 
@@ -377,6 +383,10 @@ common inflections. Size is not coverage.
 
 ### Results (n = 20,000 per split)
 
+*(Historical: measured at the then-current beam 16/32 defaults. Current
+end-to-end numbers are in the headline table; the deltas here show what the
+lexicon itself was worth.)*
+
 **futo/validation** — lexicon ceiling 98.8%
 
 | decoder | CER | top-1 | top-4 |
@@ -416,9 +426,12 @@ from 41.3% of remaining errors to 14.8% on futo/validation, and from 42.4% to
 | real-word confusions | **85.2%** | **91.6%** |
 
 `val`→`call`, `has`→`had`, `im`→`in`, `ok`→`on`. The gesture genuinely resembles
-both words, and no lexicon can separate them — only a context language model
-can, which is what FUTO's ContextLM component exists for. That is now the single
-lever that matters; encoder architecture work would buy very little ahead of it.
+both words, and no lexicon can separate them — only context can.
+
+*(Written before the context work; partly superseded. The LM was then measured
+to saturate at ~27% of this headroom — see "How much is left for any language
+model?" — and an acoustic rescorer covers part of the rest. The stacked result
+is in the headline table.)*
 
 ## Encoder gains do not survive the lexicon
 
@@ -719,206 +732,45 @@ measurement, and the remainder is the two corpora scaling differently. Read How
 We Swipe as a pessimistic stress test; the reranking headroom (top-1 82.6 vs
 n-best 93.2) remains the largest lever there, as everywhere.
 
-## Layout transfer
+## Experiment log
 
-`eval_layout_transfer.py` on the same checkpoint, against real English gestures
-performed on layouts absent from training:
+Every experiment in one place, including the failures — most of the negative
+results cost real effort to establish and would cost it again to rediscover.
+Detailed writeups live in the linked sections, the script docstrings, and the
+commit messages.
 
-| layout | grid | n | CER | word acc |
-|---|---|---|---|---|
-| qwerty | 3x10 | 28,267 | 0.140 | 71.1% |
-| qwertz | 3x10 | 801 | 0.118 | **69.5%** |
-| clearflow | 5x6 | 11,677 | 0.165 | 49.5% |
-| kasroz | 5x6 | 1,058 | 0.185 | 43.0% |
-| dvorak | 4x10 | 2,809 | 0.215 | 35.1% |
-
-Two distinct findings, and they should not be blurred together:
-
-**Letter permutation is essentially free.** qwertz keeps QWERTY's geometry and
-moves the letters; the model loses 1.6 points against qwerty (69.5% vs 71.1%)
-having never trained on it. It is not reading letter positions it memorized.
-
-**Unseen grid geometry costs real accuracy but does not break the model.**
-clearflow and kasroz are 5-row grids; the encoder only ever saw 3 rows, and
-drops to 43-50%. Well above collapse, well below parity. dvorak is weakest at
-35.1%.
-
-So layout-agnosticism holds strongly for the permutation case and partially for
-the geometry case. Closing the geometry gap most likely means training on mixed
-row counts — augmentation currently varies scale and shear but never the number
-of rows, so the model has no reason to have learned that invariance.
-
-### Error analysis
-
-```bash
-python scripts/error_analysis.py --checkpoint runs/full/encoder.pt
-```
-
-Of the 4,320 errors on futo/validation:
-
-| | share of errors | implication |
-|---|---|---|
-| prediction is not a real word | 84.7% | a lexicon rejects it outright |
-| true word in-vocab and 1 edit away | 52.5% | lexicon + beam very likely recovers |
-| predicted a *different* real word | 15.3% | needs a language model, not a lexicon |
-| true word absent from the lexicon | 12.8% | a lexicon cannot help |
-
-**The encoder is not the bottleneck for QWERTY accuracy — decoding is.** Roughly
-half the remaining error is one edit from an in-vocabulary word, and 85% of
-predictions aren't words at all. The 78.4% figure is what a lexicon-free decode
-buys; almost no shipping keyboard decodes that way.
-
-Two more findings worth having:
-
-**Short words are not the problem.** Length ≤3 accounts for only 6.6% of errors,
-and 2–3 letter words run 94–98% accurate. Errors concentrate at length 6–10
-(62% of them). The `im` → `in` sample that suggested otherwise was unrepresentative.
-
-**78% of substitutions are between physically adjacent keys** — `i`↔`o`, `r`↔`t`,
-`s`↔`d`, all at exactly 1.0 key-widths. The gesture genuinely passes near both;
-this is spatial ambiguity, not a model defect, and it is precisely what a
-lexicon disambiguates.
-
-**Doubled letters look like an encoder defect but mostly aren't.** Words
-containing a repeat score 48.8% against 81.7% without — a 33-point gap. CTC
-needs a blank frame between the two identical labels, but the gesture for
-"hello" traces h-e-l-o exactly like "helo": there is no geometric signal
-separating them, only dwell duration. This is intrinsic ambiguity in shape
-writing, and the lexicon is what resolves it.
-
-**Out-of-vocabulary words are the genuine encoder weakness**: 31.8% versus 80.4%
-on in-vocabulary words. These are also the cases where a lexicon *cannot* help,
-so this is where encoder work would actually pay.
-
-The picture holds cross-corpus. On How We Swipe: 78.8% non-words, 45.1%
-in-vocab-and-one-edit, doubled letters 44.2% vs 67.3%.
-
-## The decoder
-
-```bash
-python scripts/eval_decoder.py --checkpoint runs/full/encoder.pt --limit 20000
-```
-
-Trie-constrained CTC prefix beam search (`model/beam.py`). Standard prefix beam
-search with two changes: a prefix may only be extended by a character the
-lexicon trie allows, so a non-word can never be emitted; and only prefixes on a
-word-terminal node may finish, scored with a unigram prior (`alpha`) and a
-length bonus (`beta`).
-
-Prefix beam search rather than n-best rescoring because CTC assigns probability
-to *label sequences*, and many alignments collapse to the same string — summing
-over them is the point, and that is what the blank/non-blank split is doing.
-
-### The lexicon sets the ceiling
-
-Whatever is not in the lexicon cannot be produced, so `--lexicon` is switchable
-and the ceiling is reported next to every number. The default blends the FUTO
-training vocabulary with the top ~320k English words by frequency (`wordfreq`).
-
-Measured on 2,000 validation swipes, top-1 word accuracy:
-
-| lexicon | size | futo ceiling | futo | hws ceiling | hws |
-|---|---|---|---|---|---|
-| training vocab | 65k | 97.0% | 91.8% | 88.4% | 74.3% |
-| wordfreq 50k | 48k | 95.5% | 90.1% | 93.1% | 77.4% |
-| wordfreq 200k | 183k | 98.0% | 91.7% | 96.8% | 78.8% |
-| train + wordfreq 320k | 302k | 99.1% | 92.0% | 98.0% | **79.3%** |
-
-Two things worth taking from this. **A larger vocabulary does not degrade
-precision** — I expected 300k words to admit enough confusable candidates to
-cost accuracy, and it doesn't, because the frequency prior absorbs them. And
-**general vocabulary matters far more cross-corpus than in-corpus**: +0.2 points
-on futo/validation, whose own training vocabulary already covered 97% of it,
-versus +5.0 on How We Swipe.
-
-A trap worth recording: the Unix dictionary (`/usr/share/dict/words`) has 236k
-entries but covers only 82.6% of futo/validation — it is an archaic list missing
-common inflections. Size is not coverage.
-
-### Results (n = 20,000 per split)
-
-**futo/validation** — lexicon ceiling 98.8%
-
-| decoder | CER | top-1 | top-4 |
+| # | experiment | outcome | detail |
 |---|---|---|---|
-| greedy, no lexicon | 0.070 | 78.4% | — |
-| beam 16 | 0.043 | 91.1% | 95.3% |
-| beam 32 | 0.039 | **91.6%** | **96.1%** |
+| 1 | canonical space + cross-corpus alignment | corpora agree to 0.124 key half-widths | `validate_alignment.py` |
+| 2 | CTC encoder, 10 epochs | 78.4% greedy / CER 0.070 (val) | `train_encoder.py` |
+| 3 | layout transfer | permutation ~free (qwertz −1.6); unseen 5-row grids cost 20-30 pts | `eval_layout_transfer.py` |
+| 4 | error analysis | 85% of greedy errors are non-words → decode, not encoder | `error_analysis.py` |
+| 5 | trie beam search | +13.2 over greedy | `eval_decoder.py` |
+| 6 | lexicon 65k → 320k | OOV errors 41% → 15%; big lexicons don't hurt precision | `eval_decoder.py --lexicon` |
+| 7 | oracle n-best curve | sized the reranking ceiling; most headroom at k≤4 | `eval_decoder.py --top-k` |
+| 8 | cross-corpus gap, 8 hypotheses | 7 refuted; ~5.5 pts intrinsic by matched-size training | `diagnose_transfer.py`, `finetune_transfer.py` |
+| 9 | beam 32/−9 → 64/−13 | n-best hit +2.2 on hws; a third of the "encoder" bucket was search | `eval_decoder.py` |
+| 10 | bigram context reranking | +0.4/+0.6 — **only** the gated delta form works; raw logP hurts at every weight | `eval_reranker.py` |
+| 11 | neural LM ceiling (distilgpt2, gpt2) | LM path saturates at +1.3 of 5.0; ~73% of headroom is acoustic | `eval_neural_rerank.py` |
+| 12 | acoustic rescorer | +0.5 alone; stacks with LM to +1.95 (37% of headroom) | `train_rescorer.py`, `eval_full_stack.py` |
+| 13 | rescorer capacity 96→160d | **null** — identical accuracy, pure overfit | commit `42a6168` |
+| 14 | rescorer on encoder-unseen data | **worse** (4.6% vs 11.3% of headroom) — distribution shift beats overconfidence fix | commit `42a6168` |
+| 15 | α/β re-tune for new config | **null** — optimum didn't move; sweep now ~1s via `beam_candidates()` | `tune_beam_weights.py` |
+| 16 | test-time augmentation | **null** — posteriors are 0.9998 one-hot; nothing to average | `eval_tta.py` |
+| 17 | encoder 10 → 20 epochs | +1.7 greedy, but lexicon absorbs ~10× → +0.18 beam (noise on futo) | commit `da6b142` |
+| 18 | rescorer behind 20-epoch encoder | first-pass gains absorbed **twice**; compound only where encoder is the bottleneck (hws +0.88) | commit `3098170` |
+| 19 | held-out test split, frozen config | **93.92%** top-1; every stage within 1.2 SE of validation — no tuning overfit | commit `a3909bb` |
 
-**how_we_swipe** — lexicon ceiling 98.4%
+Standing conclusions the log supports:
 
-| decoder | CER | top-1 | top-4 |
-|---|---|---|---|
-| greedy, no lexicon | 0.126 | 64.4% | — |
-| beam 16 | 0.098 | 79.7% | 87.1% |
-| beam 32 | 0.094 | **80.2%** | **88.2%** |
-
-Lexicon-constrained decoding is worth **+13.2 points** on futo/validation and
-**+15.8** on How We Swipe. Beam 32 reaches 93% of the achievable ceiling on
-futo/validation and 82% on How We Swipe.
-
-Decoding runs at roughly 1,000 swipes/s single-threaded at beam 32 — the trie
-prunes hard enough that decode speed was never the bottleneck I expected.
-
-`alpha`/`beta` were tuned on 2,000 validation swipes, but the entire grid
-`alpha ∈ [0, 1.6] × beta ∈ [0, 2.0]` spans under one point of accuracy, so
-neither value is load-bearing.
-
-### What is left
-
-Growing the vocabulary largely emptied the out-of-vocabulary bucket — it fell
-from 41.3% of remaining errors to 14.8% on futo/validation, and from 42.4% to
-8.4% on How We Swipe. What remains is almost entirely one thing:
-
-| | futo/validation | how_we_swipe |
-|---|---|---|
-| out-of-vocabulary | 14.8% | 8.4% |
-| real-word confusions | **85.2%** | **91.6%** |
-
-`val`→`call`, `has`→`had`, `im`→`in`, `ok`→`on`. The gesture genuinely resembles
-both words, and no lexicon can separate them — only a context language model
-can, which is what FUTO's ContextLM component exists for. That is now the single
-lever that matters; encoder architecture work would buy very little ahead of it.
-
-## The cross-corpus gap: what it is not
-
-How We Swipe scores ~12 points below futo/validation. I tried to close it and
-mostly could not. The negative results are worth recording, because each one
-costs a day to rediscover.
-
-```bash
-python scripts/diagnose_transfer.py --checkpoint runs/full/encoder.pt
-python scripts/finetune_transfer.py --epochs 3
-```
-
-| hypothesis | measurement | verdict |
-|---|---|---|
-| participant population | English level 0.024 spread, finger 0.028, hand 0.026 | no |
-| keyboard geometry | 0.024 across the bulk (19,517 of 20,000 gestures) | no |
-| long tail of bad users | 2 of 275 users below 0.50; median 0.815 | mild |
-| sampling rate | 61 Hz vs 57 Hz; 63 vs 62 points per gesture | no |
-| model input distributions | key affinity ratio 1.01, kinematics 0.85–1.01 | no |
-| sloppier gestures | 62.5% of gestures cover every key of their label, vs FUTO's 60.0% | no — it is *better* |
-| gesture shape | point counts and path lengths match at every word length | no |
-| gesture timing | rescaling to FUTO duration makes it *worse* (0.644 → 0.621) | no |
-| in-domain training data | fine-tuning on 59,721 user-disjoint swipes: **+2.5** | 18% of the gap |
-
-Two traps to avoid repeating. Keyboard aspect first appeared to have a 0.152
-spread and nearly became the story — it is an artifact of 282 gestures in two
-tiny buckets, and the trend *reverses* on FUTO. And gesture timing looked
-compelling (How We Swipe is 26% slower, and five of six kinematic channels are
-velocity-scaled) but a two-minute eval-time rescale refuted it, where a retrain
-would have cost thirty.
-
-The clearest evidence it is intrinsic: fine-tuning on How We Swipe **alone**
-plateaus at a training loss of 0.365, where FUTO reaches 0.17. The model cannot
-*fit* that data, not merely generalize to it, and undiluted in-domain training
-buys only +3.4 points while costing 3.6 on FUTO to forgetting.
-
-**Read How We Swipe as a pessimistic stress test, not a target.** The remaining
-headroom there is the same as everywhere else — 10.6 points of reranking (see
-the oracle n-best curve), which is worth more than anything aimed at the gap
-itself.
+- Top-1 is bounded by the lexicon and the n-best ceiling, not the encoder
+  (#4, #17, #18).
+- Second-pass signals must add *evidence the first pass lacks*, never re-apply
+  a prior it already has (#10, #11).
+- The tuned surfaces are flat, which is why a dozen fits on one validation
+  slice did not overfit (#15, #19).
+- The encoder is too overconfident to ensemble (#16) — calibration, not
+  capacity, is its open problem.
 
 ## Layout
 
