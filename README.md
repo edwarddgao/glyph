@@ -376,6 +376,71 @@ both words, and no lexicon can separate them — only a context language model
 can, which is what FUTO's ContextLM component exists for. That is now the single
 lever that matters; encoder architecture work would buy very little ahead of it.
 
+## Context reranking
+
+```bash
+curl -sL -o data/lm/count_1w.txt https://www.norvig.com/ngrams/count_1w.txt
+curl -sL -o data/lm/count_2w.txt https://www.norvig.com/ngrams/count_2w.txt
+python scripts/eval_reranker.py --limit 20000
+```
+
+A word bigram with stupid backoff, reranking the top-8 beam candidates. Trained
+on the **Google Web corpus n-gram tables, external to both eval corpora** — a
+model fitted on FUTO's train-split sentences would have memorized much of its
+validation set, since both transcribe Common Voice.
+
+### Add contextual evidence only, never the raw probability
+
+The obvious formulation — `acoustic + w·log P(word | context)` — makes accuracy
+**strictly worse at every weight** (0.9186 → 0.9027 at w=1.0). The reason
+generalizes beyond this project:
+
+the beam score already contains a unigram prior (`alpha=0.8`), and a sparse
+bigram backs off to unigram most of the time, so raw scoring mostly re-applies a
+prior that is already there. The residual errors are exactly the cases where
+word frequency *misleads* — the beam's top-1 is already the more frequent word —
+so doubling down on frequency pushes the wrong way.
+
+Measured on futo/validation, over the 1,037 recoverable cases (true word in the
+n-best but not ranked first):
+
+| | |
+|---|---|
+| raw `log P(w\|ctx)` prefers the **wrong** word | 56.8% — worse than chance |
+| restricted to *observed* bigrams, prefers the **true** word | **74.2%** |
+| true bigram present in the table at all | 31.3% |
+| correct items exposed per recoverable item | **17.7×** |
+
+The signal is real but only where a bigram was actually observed, and the
+exposure ratio is punishing. So `rerank` adds `bigram_delta` — `log P(w|ctx) −
+log P(w)`, exactly zero when the pair was never seen — which contributes
+contextual evidence without re-applying frequency.
+
+### Results (n = 20,000, beam 64, top-8)
+
+| split | baseline | gated, oracle ctx | gated, **decoded ctx** | raw, decoded ctx |
+|---|---|---|---|---|
+| futo/validation | 0.9186 | 0.9226 | **0.9223** | 0.9025 |
+| how_we_swipe | 0.8082 | 0.8145 | **0.8130** | 0.7785 |
+
+**Error propagation is negligible**: conditioning on what was actually decoded
+costs 0.0003–0.0015 against oracle context, so the streaming number is the
+honest one and it is nearly free.
+
+Gains are real but modest — **+0.4 / +0.6 points**, well short of the +3–4 I
+expected. The binding constraint is LM sparsity: only 31.3% of the true bigrams
+are in a 286k-entry table. A denser n-gram source or a small neural LM is the
+obvious next step, and its value scales with that coverage number.
+
+### A trap: judge corpora by swipes, not by unique sentences
+
+Sampling unique sentence strings suggested How We Swipe was 93% random word
+lists ("prior simpson clearing tencent") with no context to exploit. That is
+true of unique strings and badly wrong in effect — the 6% natural sentences
+("im on a plane", "is that ok") repeat far more often and cover **half its
+swipes**, so bigram coverage is 40.3%, and it gains *more* from reranking than
+FUTO does.
+
 ## The cross-corpus gap
 
 How We Swipe scores ~12 points below futo/validation. Two rounds of

@@ -260,3 +260,89 @@ def test_all_blank_input_returns_nothing():
     lex = Lexicon.from_words(["cat"])
     lp = frames([None] * 6, confidence=CERTAIN)
     assert beam_search(lp, lex, ALPHABET) == []
+
+
+# --- context language model -------------------------------------------------
+
+def test_lm_bigram_beats_unigram_where_observed():
+    from swipe_typing.model.contextlm import ContextLM
+
+    lm = ContextLM.from_sentences(["i am here", "i am late", "an apple"] * 10)
+    assert lm.logp("am", "i") > lm.logp("apple", "i")
+    assert lm.has_bigram("am", "i")
+    assert not lm.has_bigram("apple", "i")
+
+
+def test_lm_backs_off_when_bigram_unseen():
+    from swipe_typing.model.contextlm import BACKOFF, ContextLM
+
+    lm = ContextLM.from_sentences(["the cat sat"] * 5)
+    got = lm.logp("sat", "zebra")
+    assert got == pytest.approx(math.log(BACKOFF) + lm.logp_unigram("sat"))
+
+
+def test_lm_unseen_word_is_floored_not_infinite():
+    from swipe_typing.model.contextlm import ContextLM
+
+    lm = ContextLM.from_sentences(["the cat sat"])
+    assert math.isfinite(lm.logp_unigram("qwertyuiop"))
+    assert lm.logp_unigram("qwertyuiop") < lm.logp_unigram("cat")
+
+
+def test_bigram_delta_is_zero_when_unobserved():
+    """The property that makes gated reranking work: a sparse table must
+    contribute nothing rather than re-applying the unigram prior."""
+    from swipe_typing.model.contextlm import ContextLM
+
+    lm = ContextLM.from_sentences(["i am here"] * 5)
+    assert lm.bigram_delta("here", "zebra") == 0.0
+    assert lm.bigram_delta("am", "i") != 0.0
+
+
+def test_bigram_delta_matches_definition():
+    from swipe_typing.model.contextlm import ContextLM
+
+    lm = ContextLM.from_sentences(["i am here", "you are here"] * 5)
+    d = lm.bigram_delta("am", "i")
+    assert d == pytest.approx(lm.logp("am", "i") - lm.logp_unigram("am"))
+
+
+def test_rerank_promotes_the_contextual_candidate():
+    from swipe_typing.model.contextlm import ContextLM, rerank
+
+    lm = ContextLM.from_sentences(["it has rained", "it has snowed"] * 20)
+    # acoustic score slightly favours "had"; context should flip it
+    cands = [("had", -2.0), ("has", -2.3)]
+    assert rerank(cands, lm, "it", weight=2.0)[0][0] == "has"
+
+
+def test_rerank_zero_weight_preserves_order():
+    from swipe_typing.model.contextlm import ContextLM, rerank
+
+    lm = ContextLM.from_sentences(["it has rained"] * 5)
+    cands = [("had", -2.0), ("has", -2.3)]
+    assert [w for w, _ in rerank(cands, lm, "it", weight=0.0)] == ["had", "has"]
+
+
+def test_rerank_gated_ignores_unobserved_context():
+    from swipe_typing.model.contextlm import ContextLM, rerank
+
+    lm = ContextLM.from_sentences(["it has rained"] * 5)
+    cands = [("had", -2.0), ("has", -2.3)]
+    # no bigram for either word after "zebra" -> gated must not reorder
+    assert [w for w, _ in rerank(cands, lm, "zebra", weight=5.0)] == ["had", "has"]
+
+
+def test_rerank_empty():
+    from swipe_typing.model.contextlm import ContextLM, rerank
+
+    assert rerank([], ContextLM.from_sentences(["a b"]), "a") == []
+
+
+def test_lm_coverage():
+    from swipe_typing.model.contextlm import ContextLM
+
+    lm = ContextLM.from_sentences(["i am here"] * 3)
+    assert lm.coverage([("i", "am")]) == 1.0
+    assert lm.coverage([("zebra", "quux")]) == 0.0
+    assert lm.coverage([]) == 0.0

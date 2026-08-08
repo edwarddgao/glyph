@@ -28,7 +28,8 @@ MAX_WORD_LEN = 24
 class SwipeCorpus:
     """Flat in-memory store of canonical swipes."""
 
-    def __init__(self, x, y, t, offsets, words, aspects, sessions=None):
+    def __init__(self, x, y, t, offsets, words, aspects, sessions=None,
+                 sentences=None, word_idx=None):
         self.x, self.y, self.t = x, y, t
         self.offsets = offsets
         self.words = words
@@ -36,6 +37,12 @@ class SwipeCorpus:
         #: Donor id per swipe. Needed to group results by user, and to build
         #: user-disjoint splits.
         self.sessions = sessions if sessions is not None else [""] * len(words)
+        #: Sentence the word was drawn from, and its position in it. Carried so
+        #: a context language model can condition on the preceding word.
+        self.sentences = sentences if sentences is not None else [""] * len(words)
+        self.word_idx = (np.asarray(word_idx, dtype=np.int32)
+                         if word_idx is not None
+                         else np.full(len(words), -1, dtype=np.int32))
 
     def __len__(self) -> int:
         return len(self.words)
@@ -59,6 +66,7 @@ class SwipeCorpus:
                     origin: str = "<swipes>") -> "SwipeCorpus":
         letters = set(alphabet)
         xs, ys, ts, words, aspects, sessions = [], [], [], [], [], []
+        sentences, widx = [], []
         offsets = [0]
         for sw in swipes:
             w = sw.word
@@ -70,6 +78,8 @@ class SwipeCorpus:
             words.append(w)
             aspects.append(sw.aspect)
             sessions.append(sw.session)
+            sentences.append(sw.sentence)
+            widx.append(sw.word_idx)
             offsets.append(offsets[-1] + len(sw.x))
             if limit and len(words) >= limit:
                 break
@@ -83,6 +93,8 @@ class SwipeCorpus:
             words,
             np.asarray(aspects, dtype=np.float32),
             sessions,
+            sentences,
+            widx,
         )
 
 

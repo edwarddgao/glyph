@@ -41,11 +41,16 @@ def _logaddexp(a: float, b: float) -> float:
 
 @dataclass
 class BeamConfig:
-    beam_width: int = 32
+    #: Measured on held-out How We Swipe users: widening 32 -> 64 lifts the
+    #: n-best hit rate from 90.4% to 92.6%. A third of what looked like
+    #: "the encoder never surfaces the word" was this search being too narrow.
+    beam_width: int = 64
     #: Skip characters whose per-frame log-prob is below this. Most frames are
-    #: dominated by blank, so this prunes the inner loop hard with no measurable
-    #: accuracy cost.
-    prune_logp: float = -9.0
+    #: dominated by blank, so this prunes the inner loop hard. -9.0 was *not*
+    #: free as originally assumed -- loosening to -13.0 is worth another ~0.5
+    #: point of top-1. Together with the wider beam this costs ~7 ms/word
+    #: single-threaded, still comfortably realtime.
+    prune_logp: float = -13.0
     #: Weight on the unigram word prior. Tuned on 2,000 futo/validation swipes;
     #: the whole grid alpha in [0, 1.6] x beta in [0, 2.0] spans under one point
     #: of word accuracy, so neither value is load-bearing.
