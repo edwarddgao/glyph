@@ -432,6 +432,34 @@ expected. The binding constraint is LM sparsity: only 31.3% of the true bigrams
 are in a 286k-entry table. A denser n-gram source or a small neural LM is the
 obvious next step, and its value scales with that coverage number.
 
+### How much is left for *any* language model?
+
+```bash
+python scripts/eval_neural_rerank.py --limit 5000 --lm gpt2
+```
+
+Rather than build a denser n-gram model and find out, rescore the *existing*
+n-best lists with a pretrained neural LM — no training, one number.
+
+| reranker | decoded-context top-1 | gain | share of headroom |
+|---|---|---|---|
+| none (beam 64) | 0.9228 | — | — |
+| word bigram, gated | 0.9268 | +0.4 | 8% |
+| distilgpt2 (82M) | 0.9346 | +1.2 | 24% |
+| gpt2 (124M) | **0.9360** | **+1.3** | **27%** |
+| n-best@8 ceiling | 0.9724 | +5.0 | 100% |
+
+**The LM path is saturated.** A 51% parameter increase (82M → 124M) buys 0.14
+points, so the curve is flat and a larger model will not change the picture.
+Roughly **73% of the remaining headroom is not language-modelable** — it is
+acoustic: `philipp`/`philip`, `wayne`/`warner`, near-identical paths where
+context cannot help.
+
+The delta formulation matters here too, and more sharply than for bigrams: at
+weight 0.8, raw `log P(w|ctx)` gives 0.9248 against delta's 0.9386. Decoded
+context costs 0.26 points versus oracle, partly error propagation and partly
+because decoded text is lowercase, which is out of distribution for GPT-2.
+
 ### A trap: judge corpora by swipes, not by unique sentences
 
 Sampling unique sentence strings suggested How We Swipe was 93% random word
