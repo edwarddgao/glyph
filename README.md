@@ -455,6 +455,37 @@ Two consequences worth carrying:
   of +1.70 — consistent with its much larger "in lexicon but never in n-best"
   bucket (7.6% vs 1.9%).
 
+### Gains attenuate twice, not once
+
+The 20-epoch encoder was left unpromoted earlier. Regenerating its n-best lists
+and retraining the rescorer against it settles why, and the answer generalizes.
+
+| stage | 10-epoch | 20-epoch | delta | |
+|---|---|---|---|---|
+| futo first pass | 0.9186 | 0.9204 | +0.18 | noise |
+| futo + rescorer | 0.9240 | 0.9236 | −0.04 | noise |
+| **futo full stack** | **0.9381** | 0.9369 | −0.12 | noise |
+| how_we_swipe first pass | 0.8020 | 0.8088 | +0.68 | significant |
+| how_we_swipe + rescorer | 0.8124 | 0.8210 | +0.86 | significant |
+| **how_we_swipe full stack** | 0.8130 | **0.8218** | +0.88 | significant |
+
+The stronger encoder leaves the rescorer less to fix: it recovers **11.3%** of
+available headroom behind the weaker encoder and only **6.7%** behind the
+stronger one. So a first-pass gain is absorbed first by the lexicon (~10x, shown
+above) and then again by the second pass, and on futo/validation nothing
+measurable survives to the end of the stack.
+
+Where the encoder genuinely is the bottleneck the opposite happens and the gains
+*compound*: How We Swipe turns +0.68 at the first pass into +0.88 end-to-end.
+
+**Not promoted.** It is neutral on the primary metric and better only
+cross-corpus, so the case rests entirely on How We Swipe. Promoting it would
+also invalidate the test-split headline, which was measured with the 10-epoch
+encoder, and re-measuring would mean a second look at a split deliberately
+budgeted for one. Kept at `runs/full20` + `runs/rescorer20` and recommended if
+cross-corpus robustness is what matters; `runs/full` stays canonical because it
+is the configuration test actually verified.
+
 ## Context reranking
 
 ```bash
