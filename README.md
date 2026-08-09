@@ -42,8 +42,17 @@ until the configuration was frozen.
 | greedy, no lexicon | 79.30% | 0.066 |
 | + trie-constrained beam search | 92.40% | 0.033 |
 | + acoustic rescorer | 92.73% | — |
-| **+ context LM (full stack)** | **94.27%** | — |
+| + context LM, streaming decoded context | 93.83% | — |
+| + context LM, oracle left context | 94.27% | — |
+| + deferred commitment, lookahead-1 | 94.34% | — |
+| **+ deferred commitment, joint (full stack)** | **94.62%** | — |
 | n-best@8 ceiling | 97.50% | — |
+
+The two deferred-commitment rows condition the LM only on the stack's own
+decoded words — unlike the 94.27 row, there is no oracle anywhere in them.
+Lookahead-1 bounds display latency to one word (the previous word may silently
+correct when the next swipe lands, 1.9% of the time); joint may revise any
+word in the sentence (2.5%).
 
 Cross-corpus, no fine-tuning: **80.4%** top-1 on How We Swipe (85k swipes,
 different apparatus, users and year).
@@ -52,10 +61,10 @@ Everything runs on a laptop: a 1.32M-parameter encoder trained in ~65 minutes
 on an M-series GPU plus a ~7-minute MMI fine-tune over its own beam's n-best
 lists (#26), and a 436k rescorer.
 
-The test split has now been read twice, once per frozen configuration: the
-original stack (93.92, #19) and this one after the MMI fine-tune (#28). Both
-times every stage landed within ~1 SE of its validation estimate, on the
-positive side.
+The test split has now been read three times, once per frozen configuration:
+the original stack (93.92, #19), the MMI fine-tune (94.27, #28), and deferred
+commitment (94.62, #35). Every time, every stage landed within ~1–2 SE of its
+validation estimate, on the positive side.
 
 ### The tuning did not overfit
 
@@ -76,9 +85,10 @@ going in was that the full stack would give back 0.1-0.3 points, since the
 second-pass weights are the most-tuned part; it gained 0.11 instead.
 
 The second freeze (MMI config, #26–28) repeated the pattern exactly:
-first pass 92.31 validation → 92.39 test, full stack 94.10 → 94.27. Two
-configurations, ten stage-level comparisons, all within ~1 SE and all
-positive.
+first pass 92.31 validation → 92.39 test, full stack 94.10 → 94.27. The third
+(deferred commitment, #30–35) again: streaming 93.67 → 93.83, lookahead-1
+94.12 → 94.34, joint 94.54 → 94.62, with the prediction posted before the
+read. Three configurations, every stage-level comparison positive.
 
 The reason is visible in the earlier sweeps: every tuned surface was flat.
 alpha/beta spanned under one point across the entire grid, the LM weight curve
@@ -629,6 +639,60 @@ weight 0.8, raw `log P(w|ctx)` gives 0.9248 against delta's 0.9386. Decoded
 context costs 0.26 points versus oracle, partly error propagation and partly
 because decoded text is lowercase, which is out of distribution for GPT-2.
 
+### The saturation survives a 70× scale-up
+
+```bash
+python scripts/eval_neural_rerank.py --limit 5000 --lm gpt2-xl --nbest-cache nbest.pkl
+python scripts/export_rerank_bundle.py --nbest-cache nbest.pkl
+modal run scripts/modal_rerank.py        # one A10G per model, ~$1 total
+```
+
+#11 called the curve flat from a single step (82M → 124M). Rerun with the
+ladder extended two ways: the GPT-2 family to 1.5B (pure scale, same 2019
+data, run locally) and Qwen3.5 base models to 9B (modern data *and* scale,
+one rented A10G each). Every model rescores the byte-identical frozen n-best
+lists via `--nbest-cache`; same weight sweep, same delta formulation.
+
+| LM | params | vintage | decoded top-1 | share of headroom |
+|---|---|---|---|---|
+| gpt2 | 124M | 2019 | 0.9360 | 27% |
+| gpt2-medium | 355M | 2019 | 0.9362 | 27% |
+| gpt2-large | 774M | 2019 | 0.9352 | 25% |
+| gpt2-xl | 1.5B | 2019 | **0.9372** | 29% |
+| Qwen3-0.6B-Base | 0.6B | 2025 | 0.9288 | 12% |
+| Qwen3.5-0.8B-Base | 0.8B | 2026 | 0.9318 | 18% |
+| Qwen3.5-2B-Base | 2B | 2026 | 0.9338 | 22% |
+| Qwen3.5-4B-Base | 4B | 2026 | 0.9300 | 15% |
+| Qwen3.5-9B-Base | 9B | 2026 | 0.9362 | 27% |
+
+**No model at any scale converts more than 29% of the headroom.** From 124M
+to 9B — 70× the parameters, two model generations — every result lands in a
+0.84-point band, within which most differences are under 2 SE (1 SE ≈ 0.36
+here; the 4B's dip below the 2B is noise, not an inversion). The best model
+on the entire ladder is 2019's gpt2-xl, and Qwen3.5-9B ties gpt2-medium.
+
+**Distribution match beats capability.** The Qwen column is the sharper
+finding: modern curated pretraining is mildly *mismatched* to lowercase,
+casing-free conversational fragments, and it takes ~9B parameters to climb
+back to what WebText gives a 124M model for free. Qwen3.5 beats Qwen3
+size-for-size — the family improves toward the same asymptote, not past it.
+
+**The literature agrees, where it has looked.** ASR rescoring on competitive
+first passes converts ~3–11% of oracle headroom, flat in LM scale: BERT-base
+≈ BERT-large and GPT-2 buys zero (arXiv:2204.00212); a 70M model within
+0.2–0.7 WER of Llama2-7B (2406.18972); T5-3B → PaLM-540B worth ~0.5 WER
+(2306.08133). The one ~50%-conversion result (1910.14659) sits on a weak
+7.3%-WER first pass — saturation is a strong-first-pass phenomenon. On
+keyboards: Gboard's production n-gram → neural-LM swap moved words-modified
+by 0.26–1.19% (EMNLP-Industry 2024); 6.4% of a 40k lexicon has a
+gesture-*identical* twin on QWERTY, independent of any LM (Smith, Bi & Zhai,
+CHI 2015); and the FUTO paper ships its context LM unevaluated. No
+gesture-keyboard LM-size ablation or headroom-conversion figure appears to
+have been published. The one documented route past a selection ceiling is
+right context and cross-hypothesis correction (Gboard post-correction,
+−2.31 gesture WER; HyPoradise, NeurIPS 2023) — precisely the lever #30–33
+measure here.
+
 ## Second-pass acoustic rescoring
 
 ```bash
@@ -816,13 +880,21 @@ commit messages.
 | 27 | MMI round 2, on-policy (fresh lists from the fine-tuned encoder) | **null** — beam 64 92.4 vs 92.3, identical oracle curve; one round captures the gain. Consistent with the round-2 lists containing 40% fewer truth-missing swipes: the teachable discrimination was taught | `runs/mmi2/` |
 | 28 | second test freeze: MMI config, measured once | **94.27%** top-1 (greedy 79.30, beam 92.40, +rescorer 92.73, ceiling 97.50); hws full 85k 80.4. Every stage within ~1 SE of validation, positive, same as #19 | headline table |
 | 29 | error budget + confidence refresh on the frozen encoder | MMI absorbed a quarter of the doubled-letter gap (48.8 → 55.2 vs 81.7 without) — its only structural movement. OOV unchanged (30.3%), residual dominated by adjacent-key function words (`had`↔`has`). Posterior averaging still dead, but augmented views now match clean and a 4-view beam union trends positive under the noise bar — calibration is open, not a lever. Everything evening-sized is measured; what remains is project-sized | `error_analysis.py`, `eval_tta.py` |
+| 30 | deferred commitment — draft/verify over the sentence word-lattice, speculative-decoding style | **+0.46 (lookahead-1) to +0.74 (joint) over streaming commit through the full stack** (20k val, matched rescorer: 93.49 → 93.95 / 94.23). Every prior LM number committed each word before the next swipe existed, so *right* context was untouched headroom — #11's "73% acoustic" was a left-context-only bound. Last words (no right context) gain ~0, confirming the mechanism, and decoded-context joint *exceeds* the oracle-context streaming stack on the same lists (93.81): right context more than replaces perfect left context. One word of lookahead keeps ~60% of the gain at a 1.8% revision rate; the LM accepts the first-pass draft 96% of the time; deferring only margin<2 words (8%) keeps ~70%. lm weight optimum stays 0.8, beam 8 ≈ 16 — flat surfaces again | `eval_deferred_commit.py` |
+| 31 | truecase the decoded context (sentence-initial caps + "I") before LM scoring | **null** — 93.15/93.68/94.01 vs 93.14/93.67/93.99 at 20k, ≤0.02 at every stage. The decoded↔oracle gap is not recoverable surface casing; it is error propagation plus proper-noun casing, and #30 shows right context is the remedy that actually works | `eval_deferred_commit.py --truecase` |
+| 32 | rescorer provenance — the current n-best dumps predate MMI (draft 91.86, ceiling 97.05: the original encoder's exact fingerprints), and #30's first sweep had stacked the *MMI* rescorer on them | the mismatched rescorer contributed ≈0 (streaming 93.14 vs 93.19 without); the matched one restores every point — draft +0.54, streaming +0.30, joint +0.28 (93.95 → 94.23). The rescorer's value is real but *pair-specific*: it corrects the first pass it trained against, same lesson as #14 from the other side. Freeze-grade numbers for #30 need MMI-encoder dumps scored by the MMI rescorer | `eval_deferred_commit.py --rescorer runs/rescorer/rescorer.pt` |
+| 33 | deferred commitment on the frozen stack — MMI lists (`runs/mmi/nbest/`) + MMI rescorer, 20k val | **streaming 93.67 → lookahead-1 94.12 / joint 94.54** (+0.45/+0.87; ceiling 97.41 confirms the pairing). Decoded-context joint exceeds the frozen stack's *oracle*-context validation number (94.10) by +0.44 — the deferred stack needs no oracle anywhere. Margin-gated: deferring 8% of words keeps 94.28, 18% keeps 94.45. Candidate third freeze: beam 8, lm 0.8, rescorer 1.0, joint (or lookahead-1 where display latency must be bounded); test untouched | `eval_deferred_commit.py --nbest runs/mmi/nbest/futo_validation.npz --rescorer runs/mmi/rescorer.pt` |
+| 34 | LM-scale ladder over #11's frozen lists — GPT-2 family to 1.5B locally, Qwen3.5 base 0.8B–9B on Modal A10Gs (~$1) | **flat: +0.6 to +1.4 across 124M → 9B, no model converts >29% of headroom.** Ladder's best is 2019's gpt2-xl (93.72); Qwen3.5-9B, 70× gpt2's parameters, ties gpt2-medium — modern curated pretraining is *worse per parameter* on lowercase informal text, needing ~9B to match WebText at 124M. Matches ASR (rescoring converts 3–11% on competitive baselines; BERT-base ≈ large, 70M ≈ Llama2-7B, T5-3B → PaLM-540B ≈ +0.5) and Gboard's own n-gram → neural swap (≤1.19% WMR). No LM-size ablation previously published for a gesture keyboard. Scale cannot buy what left context does not contain; the open lever was right context all along (#30, #33) | `eval_neural_rerank.py --lm --nbest-cache`, `export_rerank_bundle.py`, `modal_rerank.py` |
+| 35 | third test freeze: deferred commitment, measured once on the full 48,711 | **94.62 joint / 94.34 lookahead-1 / 93.83 streaming** — draft 92.73 and ceiling 97.50 reproduce #28's stages exactly, so the lists are the frozen ones. Prediction posted before the read (93.7–93.8 / ~94.2 / ~94.6) held; every stage landed on the positive side of validation (+0.16 / +0.22 / +0.08), same as freezes one and two. The headline is now oracle-free: 94.27 conditioned the LM on the true prefix, 94.62 conditions only on the stack's own decoded words. Revision rates 1.9% / 2.5%; margin<2 gating defers 8.4% of words for 94.36 | headline table, `eval_deferred_commit.py` |
 
 Standing conclusions the log supports:
 
 - Top-1 is bounded by the lexicon and the n-best ceiling, not the encoder
   (#4, #17, #18).
 - Second-pass signals must add *evidence the first pass lacks*, never re-apply
-  a prior it already has (#10, #11).
+  a prior it already has (#10, #11). Scaling the LM does not create such
+  evidence: #11's ceiling holds through 9B and two model generations (#34) —
+  what pays is new context (#30, #33), not a bigger reader of the old context.
 - The tuned surfaces are flat, which is why a dozen fits on one validation
   slice did not overfit (#15, #19).
 - The encoder is too overconfident to ensemble (#16) — calibration, not
@@ -869,6 +941,7 @@ scripts/
   train_mmi.py            discriminative fine-tune over the beam's own n-best
   error_analysis.py       where the errors are, and what would fix them
   eval_decoder.py         greedy vs trie-constrained beam search
+  eval_deferred_commit.py hold n-best open across swipes; does right context pay?
   diagnose_transfer.py    attribute the cross-corpus gap to subgroups
   finetune_transfer.py    does in-domain data close it? (user-disjoint split)
 ```
