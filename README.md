@@ -350,6 +350,10 @@ ours are comparable. The absolute gap is *not* encoder quality — measured
 head-to-head under matched decoding, their released encoder trails ours
 (#25) — it is their scoring form and wordlist protocol.
 
+*(This table did not survive #37–38: permutation-mixture training lifts
+every unseen grid by 11–15 points and erases the dvorak deficit — see "The
+encoder's implicit LM".)*
+
 ### Error analysis
 
 ```bash
@@ -842,6 +846,120 @@ measurement, and the remainder is the two corpora scaling differently. Read How
 We Swipe as a pessimistic stress test; the reranking headroom (top-1 82.6 vs
 n-best 93.2) remains the largest lever there, as everywhere.
 
+## The encoder's implicit LM
+
+```bash
+python scripts/nbest_freq_buckets.py runs/mmi/nbest/futo_validation.npz
+python scripts/train_encoder.py --d-model 128 --dilations 1,2,4,8,1,2,4,8 \
+    --epochs 13 --permute-prob 0.25 --out runs/perm25e13
+python scripts/nbest_freq_buckets.py data/nbest/how_we_swipe_test.npz \
+    runs/perm25e13/nbest/how_we_swipe_test.npz
+```
+
+CTC emissions favour letter sequences that were common in training — the
+encoder carries an implicit LM. Bucketing every n-best miss by the target
+word's training count makes it visible: truth-in-beam climbs monotonically
+from **64% on words the encoder never trained on to 99.8% on >1k-count
+words** (futo/validation), and unseen words are 13.9× overrepresented among
+ceiling misses (4.7× on How We Swipe, from a 57% in-beam floor).
+
+Whether that is *actionable* splits sharply by corpus. A missed word outside
+the lexicon can never be emitted by the trie, so no encoder change reaches
+it — and futo's unseen tail is mostly out-of-lexicon proper nouns
+(`androscoggin`, `pellam`): its actionable slice (in-lexicon, ≤5 training
+examples) is 0.5% of swipes. How We Swipe's tail is the opposite — everyday
+conversational vocabulary FUTO's transcription prompts underrepresent
+(`tomorrow`, `sitter`, `ours`), in-lexicon and 3.9% of swipes. The implicit
+LM is not just a frequency prior; it is a *corpus-specific* one, and it
+fights every word a lexicon update would add.
+
+### Relocating it with permuted gestures
+
+The encoder only sees per-letter key affinity, so relabelling a real gesture
+under a random letter permutation of the layout — a column permutation of
+the affinity block plus the inverse permutation of the target — yields a
+perfectly realistic gesture for a different letter sequence: real
+kinematics, near-uniform label statistics, zero synthesis. This is the
+cheapest possible synthetic data, and it is the permutation-invariance the
+qwertz result (#3) said the architecture already supports.
+`--permute-prob 0.25` relabels a quarter of training samples; 13 epochs
+matches the canonical run's real-sample count.
+
+Measured through the beam against the canonical encoder (beam 64, 320k
+lexicon, 20k swipes; greedy drops 1–2 points by design — the same
+weak-greedy/strong-search trade as MMI):
+
+| | futo/validation | how_we_swipe |
+|---|---|---|
+| beam top-1 | 91.86 → 91.75 (0.6 SE — wash) | 80.82 → **81.07** |
+| truth-in-beam@8 | 97.05 → 96.97 (noise) | 90.75 → **91.01** |
+| unseen-word in-beam | 61.9 → 62.9 (n=814, noise) | 56.2 → **60.3** (+4.1, ~4 SE) |
+| in-lex ≤5-count in-beam | 92.7 → 92.7 | 76.4 → **79.0** (+2.6, ~4 SE) |
+| head (>1k) in-beam | 99.87 → 99.81 | 98.95 → 98.95 |
+
+The head does not move, the tail moves only where it is in-lexicon, and the
+aggregate follows the size of the actionable slice — a wash in-domain,
+positive cross-corpus. (At 10 epochs futo showed −0.32; matched real compute
+resolves that as training-budget tax, not a cost of the change.)
+
+Two structural signatures confirm the prior *relocated* rather than
+vanished. The α/β surface, flat to under a point on the canonical encoder
+(#15, #23) because the emissions already carried the unigram, now spans
+**4.9 points**, and removing α outright costs 3.5 — the prior sits in the
+tunable knob instead of the frozen weights. Its β optimum moves to 2.4,
+worth +0.24 on futo, which puts the permutation encoder at parity with
+canonical after re-tuning.
+
+### Layout transfer was the buried payoff
+
+Random-permutation training is layout-agnosticism as a training objective,
+so #22's held-out-layout eval is its natural exam (beam 100, β=1.2 for
+comparability; baseline is the stronger 20-epoch encoder):
+
+| layout | grid | 20-epoch | perm25e13 | hit@8 |
+|---|---|---|---|---|
+| qwerty (swipe-5) | 3×10 | 84.3% | 83.9% | 90.0% |
+| qwertz | 3×10 | 86.1% | 87.5% | 95.4% |
+| clearflow | 5×6 | 83.4% | **94.3%** | 97.3% |
+| kasroz | 5×6 | 84.0% | **95.7%** | 97.7% |
+| dvorak | 4×10 | 79.4% | **94.6%** | 97.4% |
+
+**Every unseen grid gains 11–15 points**, from an encoder that saw 25% fewer
+real swipes than its baseline. The dvorak deficit — the one thing #22 left
+standing — is erased; all three unseen-geometry layouts now score *above*
+the same-corpus qwerty baseline, and their n-best hit rates sit at ~97.5%.
+Greedy tells the mechanism: it *rises* 15–25 points on unseen grids
+(clearflow 49.0 → 75.6, dvorak 40.4 → 65.1) while falling 3 on qwerty — the
+implicit LM was a qwerty-conditional sequence prior, actively fighting
+letter-position pairings it had never seen. For calibration, the FUTO
+paper's 96.84/97.68 on clearflow/kasroz used a wordlist extended with the
+evaluation targets; these numbers use the honest 320k lexicon.
+
+Two follow-ups sharpened the picture (#39–40). The overconfidence problem
+(#16) is *not* the implicit LM: the permutation encoder's posteriors are
+identically one-hot (mean max-posterior 0.9902 vs 0.9899, 81% of frames
+above 0.999 in both), posterior averaging is still dead, and the 4-view
+beam union still sits under the noise bar — CTC peakiness, not
+prior-driven certainty. And MMI (#26) *composes* with the relocation:
+one epoch over the permutation encoder's own beam-128 lists buys the same
++0.36 first pass it bought canonical (91.75 → 92.11, ceiling 97.28), with
+the gain concentrated in the rare-word tail, α still load-bearing after
+(the prior is not re-absorbed), and the best How We Swipe numbers of any
+encoder yet (81.09 top-1, 91.31 in-beam, unseen-word in-beam +5.5 over
+canonical). Layout wins survive the fine-tune on 3- and 5-row grids
+(clearflow 95.4, kasroz 96.6 at β=1.2; the encoder's own β=2.4 adds
+another ~0.7 pre-MMI) — dvorak alone gives back 2.0 of its 15.2 (~4 SE),
+still +13 over canonical.
+
+**Not promoted** — the composed encoder sits 0.20 (~1 SE) under the frozen
+first pass on futo/validation, and re-freezing would spend a test read on
+a change that is at best neutral there (#18's logic, again). But the
+recommendation now has two tiers: `runs/full` + MMI remains canonical for
+the frozen qwerty benchmark, and `--permute-prob 0.25` plus one MMI epoch
+(`runs/perm25mmi`) is the right training recipe for anything that ships to
+more than one layout or accepts user-added vocabulary — which is to say,
+for a keyboard.
+
 ## Experiment log
 
 Every experiment in one place, including the failures — most of the negative
@@ -886,6 +1004,12 @@ commit messages.
 | 33 | deferred commitment on the frozen stack — MMI lists (`runs/mmi/nbest/`) + MMI rescorer, 20k val | **streaming 93.67 → lookahead-1 94.12 / joint 94.54** (+0.45/+0.87; ceiling 97.41 confirms the pairing). Decoded-context joint exceeds the frozen stack's *oracle*-context validation number (94.10) by +0.44 — the deferred stack needs no oracle anywhere. Margin-gated: deferring 8% of words keeps 94.28, 18% keeps 94.45. Candidate third freeze: beam 8, lm 0.8, rescorer 1.0, joint (or lookahead-1 where display latency must be bounded); test untouched | `eval_deferred_commit.py --nbest runs/mmi/nbest/futo_validation.npz --rescorer runs/mmi/rescorer.pt` |
 | 34 | LM-scale ladder over #11's frozen lists — GPT-2 family to 1.5B locally, Qwen3.5 base 0.8B–9B on Modal A10Gs (~$1) | **flat: +0.6 to +1.4 across 124M → 9B, no model converts >29% of headroom.** Ladder's best is 2019's gpt2-xl (93.72); Qwen3.5-9B, 70× gpt2's parameters, ties gpt2-medium — modern curated pretraining is *worse per parameter* on lowercase informal text, needing ~9B to match WebText at 124M. Matches ASR (rescoring converts 3–11% on competitive baselines; BERT-base ≈ large, 70M ≈ Llama2-7B, T5-3B → PaLM-540B ≈ +0.5) and Gboard's own n-gram → neural swap (≤1.19% WMR). No LM-size ablation previously published for a gesture keyboard. Scale cannot buy what left context does not contain; the open lever was right context all along (#30, #33) | `eval_neural_rerank.py --lm --nbest-cache`, `export_rerank_bundle.py`, `modal_rerank.py` |
 | 35 | third test freeze: deferred commitment, measured once on the full 48,711 | **94.62 joint / 94.34 lookahead-1 / 93.83 streaming** — draft 92.73 and ceiling 97.50 reproduce #28's stages exactly, so the lists are the frozen ones. Prediction posted before the read (93.7–93.8 / ~94.2 / ~94.6) held; every stage landed on the positive side of validation (+0.16 / +0.22 / +0.08), same as freezes one and two. The headline is now oracle-free: 94.27 conditioned the LM on the true prefix, 94.62 conditions only on the stack's own decoded words. Revision rates 1.9% / 2.5%; margin<2 gating defers 8.4% of words for 94.36 | headline table, `eval_deferred_commit.py` |
+| 36 | frequency-bucket diagnosis of n-best misses | the encoder carries an implicit LM: truth-in-beam climbs 64% → 99.8% with training count; unseen words are 13.9×/4.7× overrepresented among futo/hws ceiling misses. futo's tail is out-of-lexicon proper nouns (unfixable, 0.5% actionable); hws's is in-lexicon everyday vocabulary, 3.9% of swipes | `nbest_freq_buckets.py` |
+| 37 | permutation-mixture training — relabel 25% of samples under random letter permutations, matched real compute (13 epochs) | futo **wash** (−0.11 top-1, 0.6 SE; ceiling −0.09); hws +0.25 with unseen-word in-beam +4.1 (~4 SE) and the head untouched. The α surface steepens from <1 pt (#15) to 4.9 pts, α=0 now costs 3.5 — the frequency prior relocated from frozen emissions into the tunable knob. β re-optimum 2.4 (+0.24, parity with canonical). Greedy −1 to −2 by design | `train_encoder.py --permute-prob`, `runs/perm25e13/` |
+| 38 | layout transfer with the permutation encoder | **+11 to +15 on every unseen grid** (clearflow 83.4 → 94.3, kasroz 84.0 → 95.7, dvorak 79.4 → 94.6 at beam 100, honest lexicon); qwerty flat; hit@8 ≈ 97.5% everywhere. #22's residual dvorak deficit erased; greedy on unseen grids +15–25 while qwerty greedy falls — the implicit LM was qwerty-conditional. Layout-agnosticism now holds at the geometry level, from 25% less real data | `eval_layout_beam.py --checkpoint runs/perm25e13/encoder.pt` |
+| 39 | is the overconfidence (#16) the implicit LM? — TTA + posterior-sharpness probe on the permutation encoder | **no.** Posteriors identically one-hot (mean max 0.9902 vs 0.9899, 81% of frames >0.999 on both encoders); posterior averaging still dead (−0.12), 4-view beam union still under the noise bar (+0.13/+0.17). Overconfidence is CTC peakiness, not prior-driven certainty — calibration stays open, with sharper attribution | `eval_tta.py --checkpoint runs/perm25e13/encoder.pt` |
+| 40 | do the two encoder levers compose? — MMI (#26 recipe, beam-128/top-16 lists, one epoch) on the permutation encoder | **yes.** First pass 91.75 → 92.11 (+0.36, same size as on canonical), ceiling 97.28; the gain lands in the rare-word tail (count 1–5 top-1 +2.6, target slice in-beam 92.7 → 94.6) with the head flat. α stays load-bearing (−3.6 at α=0) — MMI does not re-absorb the prior — and the β optimum returns to 1.2. Best hws numbers of any encoder (81.09 / in-beam 91.31); layout wins survive except dvorak −2.0 (~4 SE, still +13 vs canonical). Composed config lands 0.20 (~1 SE) under the frozen futo first pass with everything else better | `runs/perm25mmi/` |
+| 41 | is overconfidence costing the search? — post-hoc softening sweep + full-CTC autopsy of never-surfaced words | **no.** Temperature/floor softening of cached emissions moves truth-survival by at most +0.08 (noise) while top-1 falls up to −1.2 — sharpness is load-bearing for ranking. Of the 268 in-lexicon misses at 20k, the truth loses to the beam winner by a median 7.9 nats (≈2700×) under a full-alignment score, and guaranteeing every letter ≥0.1% at every frame flips only 12% of the contests: write-off damage ≈0.16% of swipes ≈0.05 pts through the stack. Retraining for humility is priced and dead; the open confidence work is post-hoc — calibrated commit gating (#33) and lexicon escape | `probe_peakiness.py` |
 
 Standing conclusions the log supports:
 
@@ -897,8 +1021,14 @@ Standing conclusions the log supports:
   what pays is new context (#30, #33), not a bigger reader of the old context.
 - The tuned surfaces are flat, which is why a dozen fits on one validation
   slice did not overfit (#15, #19).
-- The encoder is too overconfident to ensemble (#16) — calibration, not
-  capacity, is its open problem.
+- The encoder is too overconfident to ensemble (#16), but the
+  overconfidence is CTC peakiness, not the implicit LM (#39), and it is
+  behaviorally harmless to the search: softening the emissions buys no
+  ceiling and costs top-1, and the words the search never surfaces lose on
+  merit, by ~8 nats, not to write-offs (#41). The open problem is
+  decision-level confidence — a post-hoc calibrated "is the top-1 right?"
+  signal feeding commit gating (#33) and lexicon escape — not emissions
+  calibration.
 - As of #20–24 the decode side is closed: width, pruning, scoring family,
   lexicon size, list depth, and both second-pass weights are all measured,
   and every one either sits at a flat optimum or is absorbed on the way up.
@@ -913,6 +1043,13 @@ Standing conclusions the log supports:
   improves what the encoder says rather than how the pipeline reads it. It
   also replicates #25's diagnosis in our own weights: emissions trained for
   the search stop being greedy-readable, and that trade is worth points.
+- The OOV defect is the encoder's implicit LM, now measured (#36) and
+  relocatable (#37): permutation-mixture training moves the frequency prior
+  into the lexicon at no in-domain cost, and the same change closes the
+  layout-geometry gap (#38) — the prior was qwerty-conditional, not just
+  frequency-conditional. Priors belong in the swappable components; the
+  encoder should be as close to a pure acoustic scorer as the explicit
+  stack can compensate for.
 
 ## Layout
 
@@ -942,6 +1079,7 @@ scripts/
   error_analysis.py       where the errors are, and what would fix them
   eval_decoder.py         greedy vs trie-constrained beam search
   eval_deferred_commit.py hold n-best open across swipes; does right context pay?
+  nbest_freq_buckets.py   bucket n-best misses by the target's training count
   diagnose_transfer.py    attribute the cross-corpus gap to subgroups
   finetune_transfer.py    does in-domain data close it? (user-disjoint split)
 ```

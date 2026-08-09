@@ -61,9 +61,15 @@ class NeuralLM:
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         self.tok = AutoTokenizer.from_pretrained(name)
-        self.model = AutoModelForCausalLM.from_pretrained(name).to(device).eval()
+        # "auto" keeps GPT-2 in fp32 (matching the original run) and loads
+        # modern checkpoints in their native bf16, which multi-B models need
+        # to fit and to run at a usable speed on MPS.
+        self.model = (AutoModelForCausalLM.from_pretrained(name, dtype="auto")
+                      .to(device).eval())
         self.device = device
-        self.bos = self.tok.bos_token_id
+        # Qwen-style tokenizers have no BOS; eos is their document separator.
+        self.bos = (self.tok.bos_token_id if self.tok.bos_token_id is not None
+                    else self.tok.eos_token_id)
         self._uncond: dict[str, float] = {}
 
     def _ctx_ids(self, context: str) -> torch.Tensor:
@@ -95,7 +101,7 @@ class NeuralLM:
             mask[i, c_len:c_len + len(t)] = 1
 
         logits = self.model(input_ids=inp, attention_mask=mask).logits
-        logprobs = F.log_softmax(logits, dim=-1)
+        logprobs = F.log_softmax(logits.float(), dim=-1)
         out = []
         for i, t in enumerate(tails):
             # position c_len-1 predicts the first candidate token
@@ -124,6 +130,8 @@ def main() -> None:
     ap.add_argument("--weights", nargs="+", type=float,
                     default=[0.0, 0.1, 0.2, 0.3, 0.5, 0.8, 1.2])
     ap.add_argument("--device", default="auto")
+    ap.add_argument("--nbest-cache", default=None,
+                    help="pickle path; reuse the first pass across LM runs")
     args = ap.parse_args()
 
     device = pick_device(args.device)
@@ -133,17 +141,38 @@ def main() -> None:
     lexicon = build_lexicon(args.lexicon, root, alphabet, 1.0)
 
     corpus = SwipeCorpus.load(root / args.split, alphabet, limit=args.limit)
-    ds = SwipeDataset(corpus, kb, augment_cfg=None, resample_mode=mode,
-                      key_units=key_units)
-    loader = make_loader(ds, batch_size=512, shuffle=False, num_workers=0)
-    chunks = []
-    with torch.no_grad():
-        for x, _, _ in loader:
-            chunks.append(model(x.to(device)).float().cpu().numpy())
-    log_probs = np.concatenate(chunks)
 
-    cfg = BeamConfig(beam_width=args.beam_width, top_k=args.top_k)
-    nbest = [beam_search(item, lexicon, alphabet, cfg) for item in log_probs]
+    cache_key = (args.checkpoint, args.split, args.limit, args.beam_width,
+                 args.top_k, args.lexicon)
+    cache_path = Path(args.nbest_cache) if args.nbest_cache else None
+    nbest = None
+    if cache_path is not None and cache_path.exists():
+        import pickle
+        with open(cache_path, "rb") as f:
+            stored = pickle.load(f)
+        if stored["key"] == cache_key:
+            nbest = stored["nbest"]
+            print(f"  n-best loaded from {cache_path}")
+        else:
+            print(f"  cache key mismatch, recomputing ({cache_path})")
+    if nbest is None:
+        ds = SwipeDataset(corpus, kb, augment_cfg=None, resample_mode=mode,
+                          key_units=key_units)
+        loader = make_loader(ds, batch_size=512, shuffle=False, num_workers=0)
+        chunks = []
+        with torch.no_grad():
+            for x, _, _ in loader:
+                chunks.append(model(x.to(device)).float().cpu().numpy())
+        log_probs = np.concatenate(chunks)
+
+        cfg = BeamConfig(beam_width=args.beam_width, top_k=args.top_k)
+        nbest = [beam_search(item, lexicon, alphabet, cfg) for item in log_probs]
+        if cache_path is not None:
+            import pickle
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(cache_path, "wb") as f:
+                pickle.dump({"key": cache_key, "nbest": nbest}, f)
+            print(f"  n-best written to {cache_path}")
     refs = corpus.words
     groups = order_by_sentence(corpus)
     n = len(refs)
