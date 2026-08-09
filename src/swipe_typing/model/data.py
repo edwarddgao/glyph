@@ -107,12 +107,22 @@ class SwipeDataset(Dataset):
             it is co-augmented with each gesture; at eval it is used as-is,
             which is what lets a QWERTY-trained model be scored on azerty.
         augment_cfg: ``None`` disables augmentation (use for validation).
+        permute_prob: probability of relabelling a sample under a random
+            letter permutation of the layout. The gesture's key *positions*
+            are untouched; the letters sitting on them are shuffled, so the
+            same trajectory becomes a gesture for a different letter sequence.
+            Because the model only sees per-letter key affinity, this is a
+            column permutation of the affinity block plus the inverse
+            permutation of the target — real kinematics, near-uniform label
+            statistics. It exists to dilute the implicit LM the encoder
+            otherwise fits to the training vocabulary.
     """
 
     def __init__(self, corpus: SwipeCorpus, layout: KeyboardLayout,
                  augment_cfg: AugmentConfig | None = DEFAULT_AUG,
                  n_points: int = features.N_POINTS, resample_mode: str = "time",
-                 key_units: bool = True, seed: int = 0):
+                 key_units: bool = True, seed: int = 0,
+                 permute_prob: float = 0.0):
         self.corpus = corpus
         self.layout = layout
         self.cfg = augment_cfg
@@ -120,6 +130,7 @@ class SwipeDataset(Dataset):
         self.resample_mode = resample_mode
         self.key_units = key_units
         self.seed = seed
+        self.permute_prob = permute_prob
         self.char_to_idx = {ch: i for i, ch in enumerate(layout.letters)}
 
     def __len__(self) -> int:
@@ -137,6 +148,7 @@ class SwipeDataset(Dataset):
         word = self.corpus.words[idx]
         centers, radii = self.layout.centers, self.layout.radii
 
+        rng = None
         if self.cfg is not None:
             rng = self._rng(idx + self.seed)
             mat = sample_affine(self.cfg, rng)
@@ -156,11 +168,24 @@ class SwipeDataset(Dataset):
         scale = features.key_scale(radii) if self.key_units else None
         kin = features.kinematics(pts, t, aspect, n=self.n_points,
                                   mode=self.resample_mode, scale=scale)
-        x = np.concatenate([aff, kin], axis=1)
 
         target = np.fromiter(
             (self.char_to_idx[c] for c in word), dtype=np.int64, count=len(word)
         )
+
+        if self.permute_prob > 0.0:
+            if rng is None:
+                rng = self._rng(idx + self.seed)
+            if rng.random() < self.permute_prob:
+                # New affinity channel i reads old channel perm[i]: letter i
+                # now sits on the key that belonged to letter perm[i]. The
+                # trajectory visits the same keys, so the label letter that
+                # was j becomes argsort(perm)[j].
+                perm = rng.permutation(aff.shape[1])
+                aff = aff[:, perm]
+                target = np.argsort(perm)[target]
+
+        x = np.concatenate([aff, kin], axis=1)
         return torch.from_numpy(x), torch.from_numpy(target)
 
 

@@ -86,6 +86,10 @@ def main() -> None:
     ap.add_argument("--eval-limit", type=int, default=20000)
     ap.add_argument("--eval-batches", type=int, default=40)
     ap.add_argument("--no-augment", action="store_true")
+    ap.add_argument("--permute-prob", type=float, default=0.0,
+                    help="fraction of training samples relabelled under a "
+                         "random letter permutation of the layout, to dilute "
+                         "the encoder's implicit LM (eval is never permuted)")
     ap.add_argument("--no-key-units", action="store_true",
                     help="measure motion in grid-heights instead of keys "
                          "(ablation: puts layouts with different row counts on "
@@ -113,6 +117,7 @@ def main() -> None:
         augment_cfg=None if args.no_augment else DEFAULT_AUG,
         resample_mode=args.resample_mode,
         key_units=not args.no_key_units,
+        permute_prob=args.permute_prob,
     )
     train_loader = make_loader(train_ds, batch_size=args.batch_size,
                                num_workers=args.workers)
