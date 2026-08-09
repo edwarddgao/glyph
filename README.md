@@ -960,6 +960,82 @@ the frozen qwerty benchmark, and `--permute-prob 0.25` plus one MMI epoch
 more than one layout or accepts user-added vocabulary — which is to say,
 for a keyboard.
 
+## Pricing absolute position: the invariance ablation
+
+```bash
+python scripts/train_encoder.py --d-model 128 --dilations 1,2,4,8,1,2,4,8 \
+    --epochs 10 --shape-only --out runs/shape10
+python scripts/probe_shape_collisions.py
+python scripts/train_ar_decoder.py --shape-only --d-model 128 \
+    --dilations 1,2,4,8,1,2,4,8 --epochs 10 --out runs/ar_shape10
+python scripts/eval_ar_decoder.py --checkpoint runs/ar_shape10/ar_decoder.pt
+```
+
+How much of decoding rests on knowing *where on the keyboard* a gesture
+happened? `--shape-only` answers by making the input translation- and
+scale-invariant: per-gesture normalization (bbox center out, isotropic
+long-side scale out), all 8 feature channels recomputed on the normalized
+trajectory, no affinity block. SHARK's shape channel, in this pipeline.
+
+| futo/validation, 20k | canonical CTC | shape CTC | shape AR |
+|---|---|---|---|
+| greedy, no lexicon | 78.5 | 62.5 | **78.4** |
+| truth among beam survivors | ~97.9 | 93.8 | **97.8** |
+| truth-in-beam@8 | 97.05 | 92.8 | 96.1 |
+| beam top-1 | **91.86** | 81.8 | 84.4 |
+
+Three separable findings:
+
+**The ambiguity is structural (#43).** Qwerty is dense with congruences —
+`is`≅`od`, `was`≅`esd`, `he`≅`gw` are literal translates on the grid, and a
+tap matches *every* word once scale is gone (a dot is any template scaled to
+zero). Ideal-template analysis (`probe_shape_collisions.py`): at quarter-key
+alignment tolerance 69% of validation swipes have a collider and a perfect
+shape matcher with a unigram tie-break caps at **90.7%** — below the anchored
+encoder's measured first pass. Anchored templates lose 2.3% at the same
+tolerance, nearly all of it the known doubled-letter class. Neither partial
+invariance is affordable either (translation-only loses 16%, scale-only 11%
+at half-key), and cross-corpus the shape features transfer *worse* (hws beam
+80.8 → 58.8): gesture-relative velocity re-inherits every apparatus
+difference key units were built to cancel. Context is the one real lever —
+gpt2-xl deciding among the collision sets with oracle two-sided context
+rescues two-thirds of the lost mass (`probe_lm_rescue.py`) — but it lifts the
+anchored stack too, needs the candidates surfaced first, and evaporates at
+position zero, where a keyboard spends much of its life.
+
+**CTC is the wrong loss for invariant input (#44).** Under invariance the
+letter posterior is *coupled*-multimodal — "i goes with s, o goes with d" —
+and CTC's conditionally independent frames can only emit marginals.
+`probe_ctc_coupling.py` shows the signature on real `is` swipes: the
+incoherent cross-term `os` **ties with the truth** (43% wins) while the
+coherent twin `od` loses by 7.9 nats of implicit-LM prior; on `on` swipes the
+more frequent near-twin `in` outscores the truth 65% of the time, because
+training pairs identical inputs with contradictory labels and the
+loss-minimizing emissions are the frequency marginal. On anchored input none
+of this binds — 19–36 nats of position evidence separates everything, which
+is why CTC was the right choice for the canonical encoder.
+
+**An autoregressive decoder refunds the modeling tax — and only that (#45).**
+`model/ar.py` keeps the TCN trunk and adds a 2-layer causal transformer head
+(1.73M total) emitting letters left to right; the trie constraint survives as
+a flattened-array beam (`FlatTrie`). Same data, same 10 epochs. Greedy jumps
+16 points to canonical parity, truth-among-survivors is restored to 97.8, and
+the probe confirms the mechanism: `os` goes from a coin flip to −9.5 nats,
+0% wins. But `is`/`of` still ties and `on`→`in` is still lost — the genuine
+collisions are untouched, so beam top-1 recovers only 2.5 of the 10-point
+gap. The residual is pure ranking among correctly surfaced congruent twins:
+oracle@2 is 91.9, meaning the truth sits at rank 1 or 2 for 92% of swipes
+with nothing but a coin to choose between them. That is what absolute
+position was buying.
+
+The affinity representation was already the right call: it is invariant to
+*co*-transformations of gesture and layout together — which augmentation
+exploits and layout swap requires — while staying anchored to the keys, so it
+pays no lexical-ambiguity tax. Restoring the anchor to the shape encoder
+takes only three numbers (bbox center + log scale, an invertible
+factorization), which is why no training or LM effort can substitute for
+them: the bits are cheap to keep and impossible to reconstruct.
+
 ## Experiment log
 
 Every experiment in one place, including the failures — most of the negative
@@ -1011,6 +1087,9 @@ commit messages.
 | 40 | do the two encoder levers compose? — MMI (#26 recipe, beam-128/top-16 lists, one epoch) on the permutation encoder | **yes.** First pass 91.75 → 92.11 (+0.36, same size as on canonical), ceiling 97.28; the gain lands in the rare-word tail (count 1–5 top-1 +2.6, target slice in-beam 92.7 → 94.6) with the head flat. α stays load-bearing (−3.6 at α=0) — MMI does not re-absorb the prior — and the β optimum returns to 1.2. Best hws numbers of any encoder (81.09 / in-beam 91.31); layout wins survive except dvorak −2.0 (~4 SE, still +13 vs canonical). Composed config lands 0.20 (~1 SE) under the frozen futo first pass with everything else better | `runs/perm25mmi/` |
 | 41 | is overconfidence costing the search? — post-hoc softening sweep + full-CTC autopsy of never-surfaced words | **no.** Temperature/floor softening of cached emissions moves truth-survival by at most +0.08 (noise) while top-1 falls up to −1.2 — sharpness is load-bearing for ranking. Of the 268 in-lexicon misses at 20k, the truth loses to the beam winner by a median 7.9 nats (≈2700×) under a full-alignment score, and guaranteeing every letter ≥0.1% at every frame flips only 12% of the contests: write-off damage ≈0.16% of swipes ≈0.05 pts through the stack. Retraining for humility is priced and dead; the open confidence work is post-hoc — calibrated commit gating (#33) and lexicon escape | `probe_peakiness.py` |
 | 42 | lexicon escape — greedy-vs-beam full-CTC score gap as an out-of-lexicon detector, escape-to-greedy as policy | **detector excellent, replacement dead.** AUC 0.974/0.924 (futo/hws) for "truth is not in the lexicon" — but the policy ceiling is a product of two small numbers: OOL truths are 1.2%/1.7% of swipes and greedy spells them exactly right only 22%/14% (the perm+MMI recipe lifts hws to 18%, futo unchanged), so net top-1 peaks at +0.02/−0.00 and false escapes outnumber recoveries at any useful sensitivity. The signal's real consumers are a secondary raw-spelling suggestion and the add-to-dictionary prompt, where a false alarm costs a candidate slot, not a correct word; transcription corpora also understate real OOL prevalence (names, slang) | `eval_lexicon_escape.py` |
+| 43 | translation+scale-invariant gestures (`--shape-only`): per-gesture normalized shape features replace the affinity block, matched budget | **−16 greedy (62.5), −10 beam (81.8), −4.2 ceiling in-domain; −22 beam cross-corpus.** Structural, not a training deficit: qwerty congruences (`is`≅`od`, taps ≅ everything) cap a *perfect* shape matcher + unigram at 90.7% (quarter-key tolerance) — under the anchored first pass. Partial invariance doesn't pay either (translation-only −16%, scale-only −11% at half-key), and gpt2-xl with oracle two-sided context rescues ⅔ of the lost mass but lifts the anchored stack equally, needs the candidates surfaced, and dies at position zero. Anchoring is recoverable from 3 numbers (bbox center + log scale); nothing else substitutes | `probe_shape_collisions.py`, `probe_lm_rescue.py`, `runs/shape10/` |
+| 44 | is CTC the right loss for invariant input? — full-CTC scores of congruent twins and their cross-terms on real swipes | **no.** The coupled posterior ("i goes with s, o goes with d") is inexpressible in factorized emissions: the incoherent cross-term `os` ties with truth (43% wins) while the coherent twin `od` loses by 7.9 nats of implicit-LM prior, and `on` swipes read as the more frequent near-twin `in` 65% of the time — identical inputs, contradictory labels, marginal emissions. On anchored input 19–36 nats of position evidence separates everything, so CTC was right for the canonical encoder and wrong only here | `probe_ctc_coupling.py` |
+| 45 | autoregressive letter decoder on shape-only input (TCN trunk + 2-layer causal transformer head, trie-constrained AR beam) | **refunds the modeling tax exactly, and only that**: greedy +16 to 78.4 (canonical parity), truth-among-survivors 93.8 → 97.8 (canonical level), `os` cross-term 0 → −9.5 nats; but `is`/`of` and `on`/`in` stay lost, so beam top-1 recovers just 2.5 of the 10-point gap (84.4). Residual is pure ranking among surfaced congruent twins — oracle@2 = 91.9. hws greedy 35.4 → 53.4. Caveats: +400k decoder params, and CE-on-words bakes the unigram into the head (α optimum 0.8 → 0.2) | `model/ar.py`, `train_ar_decoder.py`, `eval_ar_decoder.py`, `runs/ar_shape10/` |
 
 Standing conclusions the log supports:
 

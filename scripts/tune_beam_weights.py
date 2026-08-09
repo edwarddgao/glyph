@@ -58,7 +58,7 @@ def main() -> None:
 
     corpus = SwipeCorpus.load(root / args.split, alphabet, limit=args.limit)
     ds = SwipeDataset(corpus, kb, augment_cfg=None, resample_mode=mode,
-                      key_units=key_units)
+                      key_units=key_units, shape_only=model.cfg.shape_only)
     loader = make_loader(ds, batch_size=512, shuffle=False, num_workers=0)
     chunks = []
     with torch.no_grad():

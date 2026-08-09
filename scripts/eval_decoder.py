@@ -122,6 +122,9 @@ def main() -> None:
 
     device = pick_device(args.device)
     model, alphabet, key_units, mode = load_model(args.checkpoint, device)
+    # Carried in the checkpoint's config; a mismatched dataset would fail
+    # loudly at the input projection (8 vs 32 channels), never silently.
+    shape_only = model.cfg.shape_only
     kb = KeyboardLayout.qwerty()
     root = Path(args.cache)
 
@@ -136,7 +139,7 @@ def main() -> None:
             continue
         corpus = SwipeCorpus.load(path, alphabet, limit=args.limit)
         ds = SwipeDataset(corpus, kb, augment_cfg=None, resample_mode=mode,
-                          key_units=key_units)
+                          key_units=key_units, shape_only=shape_only)
         loader = make_loader(ds, batch_size=args.batch_size, shuffle=False,
                              num_workers=2)
         log_probs, refs = run_encoder(model, loader, device, alphabet)

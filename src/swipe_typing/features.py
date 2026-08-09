@@ -201,6 +201,62 @@ def kinematics(points: np.ndarray, t: np.ndarray, aspect: float,
     return np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
 
+#: Floor on the per-gesture scale used by :func:`shape_normalize`. A tap has
+#: essentially zero extent; dividing by its own bounding box would amplify
+#: sensor tremor into unit-scale noise. Flooring at 1e-3 grid-heights instead
+#: collapses taps toward a point, which is the honest behaviour for a
+#: representation that has discarded scale: a dot has no shape.
+SHAPE_SCALE_FLOOR = 1e-3
+
+
+def shape_normalize(points: np.ndarray,
+                    floor: float = SHAPE_SCALE_FLOOR) -> np.ndarray:
+    """Remove translation and (isotropic) scale from a trajectory.
+
+    Centers the bounding box on the origin and divides by the box's long side,
+    so every gesture lands in roughly [-0.5, 0.5]^2 with its aspect preserved.
+    This is the SHARK-style shape channel: what remains is *where the gesture
+    went relative to itself*, with no information about where on the keyboard
+    it happened or how large it was.
+    """
+    pts = np.asarray(points, dtype=np.float32).reshape(-1, 2)
+    if len(pts) == 0:
+        return pts
+    lo, hi = pts.min(axis=0), pts.max(axis=0)
+    scale = max(float((hi - lo).max()), floor)
+    return (pts - (lo + hi) / 2.0) / scale
+
+
+def shape_features(points: np.ndarray, t: np.ndarray, aspect: float,
+                   n: int = N_POINTS, mode: str = "time") -> np.ndarray:
+    """Translation- and scale-invariant features: ``(n, 8)``.
+
+    The full 8-channel set of :func:`encode` (position, velocity, acceleration,
+    speed, curvature), computed on the aspect-corrected, per-gesture-normalized
+    trajectory. Velocities are in gesture-sizes per second: time structure
+    (hesitation at corners) survives, absolute position and extent do not.
+    Kinematics must be recomputed here rather than reused from
+    :func:`kinematics` -- keys-per-second speed is scale-*covariant* and would
+    leak the gesture's extent back in.
+    """
+    pts = shape_normalize(aspect_correct(points, aspect))
+    xy = resample(pts, t, n=n, mode=mode).astype(np.float64)
+    duration_s = max(int(t[-1]) - int(t[0]), 1) / 1000.0 if len(t) else 1.0
+    dt = duration_s / max(n - 1, 1) if mode == "time" else 1.0 / max(n - 1, 1)
+
+    pos, vel, acc = _smooth_derivatives(xy, dt)
+    speed = np.linalg.norm(vel, axis=1)
+    cross = vel[:, 0] * acc[:, 1] - vel[:, 1] * acc[:, 0]
+    curvature = np.clip(
+        cross / (np.power(speed, 3) + _EPS), -CURVATURE_CLIP, CURVATURE_CLIP
+    )
+    out = np.column_stack(
+        [pos[:, 0], pos[:, 1], vel[:, 0], vel[:, 1],
+         acc[:, 0], acc[:, 1], speed, curvature]
+    )
+    return np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+
+
 def key_affinity(points: np.ndarray, centers: np.ndarray, radii: np.ndarray,
                  n: int = N_POINTS, t: np.ndarray | None = None,
                  mode: str = "time", temperature: float = 1.0) -> np.ndarray:

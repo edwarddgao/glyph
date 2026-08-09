@@ -39,9 +39,15 @@ class EncoderConfig:
     kernel_size: int = 5
     dilations: tuple[int, ...] = (1, 2, 4, 8, 1, 2)
     dropout: float = 0.1
+    #: Ablation: the 8-channel translation/scale-invariant input of
+    #: ``features.shape_features`` replaces the affinity block. The output
+    #: alphabet is unchanged; only the input width differs.
+    shape_only: bool = False
 
     @property
     def n_input(self) -> int:
+        if self.shape_only:
+            return 8
         return self.n_keys + self.n_kinematic
 
     @property

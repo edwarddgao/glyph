@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
-"""Train the layout-agnostic swipe encoder with CTC.
+"""Train the autoregressive letter decoder (cross-entropy, teacher forcing).
 
-    python scripts/train_encoder.py --epochs 6
+    python scripts/train_ar_decoder.py --shape-only --d-model 128 \
+        --dilations 1,2,4,8,1,2,4,8 --epochs 10 --out runs/ar_shape10
 
-Metrics are lexicon-free on purpose (greedy CTC decode -> CER and exact-match
-word accuracy). A trie-constrained beam search would score far higher, but it
-would also let a strong lexicon paper over a weak encoder. These numbers are the
-encoder standing on its own.
-
-Evaluation runs on up to three sets:
-  futo/validation      held-out donor sessions, same corpus, same layout
-  how_we_swipe/test    different corpus, different devices, different users
-  --alt-layout-eval    real gestures on layouts never seen in training
+The CTC coupling probe (#44) showed that on translation/scale-invariant input
+the letter posterior is coupled-multimodal and CTC's factorized emissions
+cannot express it. This trains the same TCN trunk with an AR decoder head,
+which can. Per-epoch metrics are unconstrained greedy AR decode -- the
+analogue of CTC greedy, lexicon-free on purpose.
 """
 
 from __future__ import annotations
@@ -19,28 +16,14 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import time
 from pathlib import Path
 
-# torch has no MPS kernel for aten::_ctc_loss, so that one op falls back to CPU.
-# Must be set before torch is imported. The tensor it ferries is small next to
-# the conv stack (B x 64 x 27), so the round trip is not the bottleneck --
-# measured at roughly a 15% step-time cost against a pure-CPU run.
-os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
-
-import torch  # noqa: E402
+import torch
 
 from swipe_typing.layout import KeyboardLayout
-from swipe_typing.model import (
-    EncoderConfig,
-    SwipeCorpus,
-    SwipeDataset,
-    SwipeEncoder,
-    ctc_loss,
-    decode,
-    make_loader,
-)
+from swipe_typing.model import SwipeCorpus, SwipeDataset, decode, make_loader
+from swipe_typing.model.ar import ARConfig, ARSwipeDecoder, ar_loss, greedy_decode
 from swipe_typing.model.encoder import fit_normalization
 
 
@@ -54,30 +37,33 @@ def pick_device(name: str) -> torch.device:
     return torch.device("cpu")
 
 
-def build_eval(path: Path, kb: KeyboardLayout, limit: int | None, batch_size: int,
-               workers: int, mode: str, key_units: bool,
-               shape_only: bool = False):
-    if not path.exists():
-        return None
-    corpus = SwipeCorpus.load(path, kb.letters, limit=limit)
-    ds = SwipeDataset(corpus, kb, augment_cfg=None, resample_mode=mode,
-                      key_units=key_units, shape_only=shape_only)
-    return make_loader(ds, batch_size=batch_size, shuffle=False,
-                       num_workers=workers)
+@torch.no_grad()
+def evaluate(model, loader, device, alphabet, max_batches=40):
+    model.eval()
+    preds, refs = [], []
+    for i, (x, targets, lengths) in enumerate(loader):
+        if i >= max_batches:
+            break
+        preds.extend(greedy_decode(model, x.to(device), alphabet))
+        refs.extend(decode.target_strings(targets, lengths, alphabet))
+    model.train()
+    m = decode.score(preds, refs)
+    m["n"] = len(refs)
+    return m
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cache", default="data/canonical")
-    ap.add_argument("--out", default="runs/encoder")
-    ap.add_argument("--epochs", type=int, default=6)
+    ap.add_argument("--out", default="runs/ar")
+    ap.add_argument("--epochs", type=int, default=10)
     ap.add_argument("--batch-size", type=int, default=256)
-    ap.add_argument("--lr", type=float, default=3e-3)
+    ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--weight-decay", type=float, default=1e-4)
     ap.add_argument("--warmup", type=int, default=500)
-    ap.add_argument("--d-model", type=int, default=96)
-    ap.add_argument("--dilations", default="1,2,4,8,1,2",
-                    help="comma-separated dilation per residual block")
+    ap.add_argument("--d-model", type=int, default=128)
+    ap.add_argument("--dilations", default="1,2,4,8,1,2,4,8")
+    ap.add_argument("--dec-layers", type=int, default=2)
     ap.add_argument("--dropout", type=float, default=0.1)
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--device", default="auto")
@@ -87,20 +73,7 @@ def main() -> None:
     ap.add_argument("--eval-limit", type=int, default=20000)
     ap.add_argument("--eval-batches", type=int, default=40)
     ap.add_argument("--no-augment", action="store_true")
-    ap.add_argument("--permute-prob", type=float, default=0.0,
-                    help="fraction of training samples relabelled under a "
-                         "random letter permutation of the layout, to dilute "
-                         "the encoder's implicit LM (eval is never permuted)")
-    ap.add_argument("--shape-only", action="store_true",
-                    help="translation/scale-invariant ablation: per-gesture "
-                         "normalized 8-channel shape features replace the key "
-                         "affinity block, so the model never sees where on "
-                         "the keyboard a gesture happened or how big it was")
-    ap.add_argument("--no-key-units", action="store_true",
-                    help="measure motion in grid-heights instead of keys "
-                         "(ablation: puts layouts with different row counts on "
-                         "different velocity scales; the transfer cost of this "
-                         "has not been measured)")
+    ap.add_argument("--shape-only", action="store_true")
     ap.add_argument("--log-every", type=int, default=100)
     args = ap.parse_args()
 
@@ -122,8 +95,6 @@ def main() -> None:
         train_corpus, kb,
         augment_cfg=None if args.no_augment else DEFAULT_AUG,
         resample_mode=args.resample_mode,
-        key_units=not args.no_key_units,
-        permute_prob=args.permute_prob,
         shape_only=args.shape_only,
     )
     train_loader = make_loader(train_ds, batch_size=args.batch_size,
@@ -132,22 +103,26 @@ def main() -> None:
     evals = {}
     for name, rel in [("futo/val", "futo/validation"),
                       ("how_we_swipe", "how_we_swipe/test")]:
-        loader = build_eval(cache_root / rel, kb, args.eval_limit,
-                            args.batch_size, max(args.workers // 2, 1),
-                            args.resample_mode, not args.no_key_units,
-                            shape_only=args.shape_only)
-        if loader is not None:
-            evals[name] = loader
-            print(f"eval {name}: {len(loader.dataset):,} swipes")
+        path = cache_root / rel
+        if not path.exists():
+            continue
+        corpus = SwipeCorpus.load(path, kb.letters, limit=args.eval_limit)
+        ds = SwipeDataset(corpus, kb, augment_cfg=None,
+                          resample_mode=args.resample_mode,
+                          shape_only=args.shape_only)
+        evals[name] = make_loader(ds, batch_size=args.batch_size, shuffle=False,
+                                  num_workers=max(args.workers // 2, 1))
+        print(f"eval {name}: {len(ds):,} swipes")
 
-    cfg = EncoderConfig(
+    cfg = ARConfig(
         n_keys=len(kb.letters),
         d_model=args.d_model,
         dilations=tuple(int(d) for d in args.dilations.split(",")),
         dropout=args.dropout,
         shape_only=args.shape_only,
+        dec_layers=args.dec_layers,
     )
-    model = SwipeEncoder(cfg).to(device)
+    model = ARSwipeDecoder(cfg).to(device)
     print(f"params: {model.num_parameters():,}")
 
     print("fitting input normalization...")
@@ -171,23 +146,20 @@ def main() -> None:
     best = float("inf")
 
     for epoch in range(args.epochs):
-        # Reseed so each epoch draws fresh augmentations.
         train_ds.seed = epoch + 1
         model.train()
         running, seen, t_epoch = 0.0, 0, time.time()
 
         for x, targets, lengths in train_loader:
-            x = x.to(device, non_blocking=True)
-            log_probs = model(x)
-            loss = ctc_loss(log_probs, targets.to(device), lengths.to(device),
-                            cfg.blank)
+            loss = ar_loss(model, x.to(device, non_blocking=True),
+                           targets, lengths)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
             sched.step()
             step += 1
-            running += float(loss)
+            running += float(loss.detach())
             seen += 1
 
             if step % args.log_every == 0:
@@ -195,42 +167,32 @@ def main() -> None:
                 print(f"  e{epoch} step {step}/{total_steps} "
                       f"loss {running / seen:.4f} "
                       f"lr {sched.get_last_lr()[0]:.2e} "
-                      f"{rate:.0f} swipes/s")
+                      f"{rate:.0f} swipes/s", flush=True)
 
         train_loss = running / max(seen, 1)
         row = {"epoch": epoch, "train_loss": train_loss,
                "secs": round(time.time() - t_epoch, 1)}
         for name, loader in evals.items():
-            m = decode.evaluate(model, loader, device, kb.letters,
-                                max_batches=args.eval_batches)
+            m = evaluate(model, loader, device, kb.letters, args.eval_batches)
             row[name] = {"cer": round(m["cer"], 4), "wacc": round(m["wacc"], 4),
                          "n": m["n"]}
         history.append(row)
         print(f"epoch {epoch}: loss {train_loss:.4f}  " + "  ".join(
             f"{k} cer={v['cer']:.3f} wacc={v['wacc']:.3f}"
             for k, v in row.items() if isinstance(v, dict)
-        ))
+        ), flush=True)
 
-        # Select on held-out CER, not train loss -- the two diverge once the
-        # model starts fitting donor-specific motor habits.
         selector = row.get("futo/val", {}).get("cer", train_loss)
         if selector < best:
             best = selector
             torch.save(
                 {"model": model.state_dict(), "cfg": vars(cfg),
                  "alphabet": kb.letters, "args": vars(args)},
-                out / "encoder.pt",
+                out / "ar_decoder.pt",
             )
         (out / "history.json").write_text(json.dumps(history, indent=2))
 
-    print(f"\nsaved {out / 'encoder.pt'}")
-    for name, loader in evals.items():
-        m = decode.evaluate(model, loader, device, kb.letters, collect=8)
-        print(f"\n== {name}: cer={m['cer']:.4f} wacc={m['wacc']:.4f} "
-              f"n={m['n']} ==")
-        for ref, pred in m.get("samples", []):
-            flag = " " if ref == pred else "x"
-            print(f"  {flag} {ref:<18} -> {pred}")
+    print(f"\nsaved {out / 'ar_decoder.pt'}")
 
 
 if __name__ == "__main__":

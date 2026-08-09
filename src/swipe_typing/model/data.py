@@ -116,13 +116,20 @@ class SwipeDataset(Dataset):
             permutation of the target — real kinematics, near-uniform label
             statistics. It exists to dilute the implicit LM the encoder
             otherwise fits to the training vocabulary.
+        shape_only: replace the affinity block entirely with the 8-channel
+            translation- and scale-invariant features of
+            :func:`features.shape_features` (per-gesture normalized position
+            plus kinematics recomputed on the normalized trajectory). The
+            model then never sees where on the keyboard a gesture happened or
+            how big it was — the ablation that prices absolute anchoring.
+            Requires an encoder built with ``EncoderConfig(shape_only=True)``.
     """
 
     def __init__(self, corpus: SwipeCorpus, layout: KeyboardLayout,
                  augment_cfg: AugmentConfig | None = DEFAULT_AUG,
                  n_points: int = features.N_POINTS, resample_mode: str = "time",
                  key_units: bool = True, seed: int = 0,
-                 permute_prob: float = 0.0):
+                 permute_prob: float = 0.0, shape_only: bool = False):
         self.corpus = corpus
         self.layout = layout
         self.cfg = augment_cfg
@@ -131,6 +138,10 @@ class SwipeDataset(Dataset):
         self.key_units = key_units
         self.seed = seed
         self.permute_prob = permute_prob
+        self.shape_only = shape_only
+        if shape_only and permute_prob > 0.0:
+            raise ValueError("permute_prob relabels the affinity block, "
+                             "which shape_only removes")
         self.char_to_idx = {ch: i for i, ch in enumerate(layout.letters)}
 
     def __len__(self) -> int:
@@ -160,6 +171,15 @@ class SwipeDataset(Dataset):
                     np.float32
                 )
 
+        target = np.fromiter(
+            (self.char_to_idx[c] for c in word), dtype=np.int64, count=len(word)
+        )
+
+        if self.shape_only:
+            x = features.shape_features(pts, t, aspect, n=self.n_points,
+                                        mode=self.resample_mode)
+            return torch.from_numpy(x), torch.from_numpy(target)
+
         resampled = features.resample(pts, t, n=self.n_points,
                                       mode=self.resample_mode)
         aff = features.key_affinity(resampled, centers, radii)
@@ -168,10 +188,6 @@ class SwipeDataset(Dataset):
         scale = features.key_scale(radii) if self.key_units else None
         kin = features.kinematics(pts, t, aspect, n=self.n_points,
                                   mode=self.resample_mode, scale=scale)
-
-        target = np.fromiter(
-            (self.char_to_idx[c] for c in word), dtype=np.int64, count=len(word)
-        )
 
         if self.permute_prob > 0.0:
             if rng is None:
