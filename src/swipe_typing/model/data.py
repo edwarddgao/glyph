@@ -123,13 +123,22 @@ class SwipeDataset(Dataset):
             model then never sees where on the keyboard a gesture happened or
             how big it was — the ablation that prices absolute anchoring.
             Requires an encoder built with ``EncoderConfig(shape_only=True)``.
+        anchor_jitter: std, in keys, of a random per-sample translation
+            applied to the *gesture only* — the layout stays put. Unlike the
+            co-augmentation above (which teaches co-transformation
+            invariance) this deliberately decalibrates gesture from keys, so
+            the model learns the anchor is informative but noisy. 0 asserts
+            an exact anchor; large values approach training-time
+            marginalization of the anchor, i.e. shape-only. The partial-
+            invariance knob.
     """
 
     def __init__(self, corpus: SwipeCorpus, layout: KeyboardLayout,
                  augment_cfg: AugmentConfig | None = DEFAULT_AUG,
                  n_points: int = features.N_POINTS, resample_mode: str = "time",
                  key_units: bool = True, seed: int = 0,
-                 permute_prob: float = 0.0, shape_only: bool = False):
+                 permute_prob: float = 0.0, shape_only: bool = False,
+                 anchor_jitter: float = 0.0):
         self.corpus = corpus
         self.layout = layout
         self.cfg = augment_cfg
@@ -139,6 +148,7 @@ class SwipeDataset(Dataset):
         self.seed = seed
         self.permute_prob = permute_prob
         self.shape_only = shape_only
+        self.anchor_jitter = anchor_jitter
         if shape_only and permute_prob > 0.0:
             raise ValueError("permute_prob relabels the affinity block, "
                              "which shape_only removes")
@@ -170,6 +180,14 @@ class SwipeDataset(Dataset):
                 pts = pts + rng.normal(0.0, self.cfg.jitter, pts.shape).astype(
                     np.float32
                 )
+
+        if self.anchor_jitter > 0.0:
+            if rng is None:
+                rng = self._rng(idx + self.seed)
+            kw = features.key_scale(radii)
+            pts = pts + (rng.normal(0.0, self.anchor_jitter, 2) * kw).astype(
+                np.float32
+            )
 
         target = np.fromiter(
             (self.char_to_idx[c] for c in word), dtype=np.int64, count=len(word)

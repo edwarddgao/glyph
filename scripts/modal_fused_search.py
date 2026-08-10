@@ -40,7 +40,7 @@ BEAM = 8
 
 @app.function(
     image=image,
-    gpu="A10G",
+    gpu="A100",
     timeout=7200,
     volumes={"/root/.cache/huggingface": hf_cache},
 )
@@ -60,7 +60,9 @@ def fused_search(cfg: dict, bundle_bytes: bytes) -> dict:
     device = torch.device("cuda")
     tok = AutoTokenizer.from_pretrained(cfg["lm"])
     tok.pad_token = tok.eos_token
-    lm = (AutoModelForCausalLM.from_pretrained(cfg["lm"], dtype="auto")
+    # gpt2-family checkpoints are fp32; "auto" would load them at double the
+    # compute for no scoring benefit.
+    lm = (AutoModelForCausalLM.from_pretrained(cfg["lm"], dtype="float16")
           .to(device).eval())
     hf_cache.commit()
     bos = tok.bos_token_id or tok.eos_token_id

@@ -74,6 +74,10 @@ def main() -> None:
     ap.add_argument("--eval-batches", type=int, default=40)
     ap.add_argument("--no-augment", action="store_true")
     ap.add_argument("--shape-only", action="store_true")
+    ap.add_argument("--anchor-jitter", type=float, default=0.0,
+                    help="std (keys) of gesture-only translation during "
+                         "training; the layout stays put. Partial-invariance "
+                         "knob: 0 = exact anchor, large = shape-only-ish")
     ap.add_argument("--log-every", type=int, default=100)
     args = ap.parse_args()
 
@@ -96,6 +100,7 @@ def main() -> None:
         augment_cfg=None if args.no_augment else DEFAULT_AUG,
         resample_mode=args.resample_mode,
         shape_only=args.shape_only,
+        anchor_jitter=args.anchor_jitter,
     )
     train_loader = make_loader(train_ds, batch_size=args.batch_size,
                                num_workers=args.workers)
