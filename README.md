@@ -1036,6 +1036,15 @@ takes only three numbers (bbox center + log scale, an invertible
 factorization), which is why no training or LM effort can substitute for
 them: the bits are cheap to keep and impossible to reconstruct.
 
+The price with *everything* applied is now measured rather than estimated
+(#50): through the identical fused search — deep lists, delta-form GPT-2,
+joint commitment — shape-only reaches 90.94 against canonical's 94.62. The
+AR decoder recovered the modeling tax, deep lists recovered the truncation,
+and context recovered 6.5 of the remaining 8 beam points; the last 3.7 are
+the collisions decoded context cannot reach — context-free positions and
+contests where language is indifferent — exactly the classes the theory
+said were irreducible.
+
 ## Experiment log
 
 Every experiment in one place, including the failures — most of the negative
@@ -1094,6 +1103,7 @@ commit messages.
 | 47 | full stack on the AR lists — pair-matched rescorer (#32's lesson) + deferred commitment, val 20k | **every stage clears the frozen stack: streaming 93.85 (+0.18), lookahead-1 94.42 (+0.30), joint 94.66 (+0.12), ceiling 97.80 (+0.39).** The rescorer converts only 4.3% of its headroom (+0.23) vs the usual ~10 — AR scores are already sequence-coherent, so the second pass has less to add; the first-pass +0.54 absorbs to +0.12 at joint, the absorption law yet again. Margin-gated: defer 8.7% of words for 94.39. **Not promoted yet** — joint's edge is under 1 SE and a freeze spends a test read (#18/#40's logic); the untried lever is the MMI-analogue (sequence-discriminative fine-tune over the AR beam's own lists, #26's +0.36 recipe), which should be measured first. If the composed gain holds, that is freeze four | `train_rescorer.py --nbest data/nbest_ar`, `eval_deferred_commit.py --nbest data/nbest_ar/...`, `runs/rescorer_ar/` |
 | 48 | MMI on the AR decoder — softmax over each swipe's rival set (truth always injectable, unlike CTC's trie), one epoch at 5e-5 over the beam's own 150k lists | **+0.15 first pass (92.40 → 92.55), half of what CTC's MMI bought** — the AR head trains sequence-discriminatively from birth, so there is less left to teach; same weak-greedy/strong-search trade (greedy −1.4). Composed stack on the MMI lists: **streaming 93.92 / lookahead-1 94.55 / joint 94.73** — the best validation numbers of the project, +0.19 over the frozen stack. Still ~1.2 SE; the freeze stays unspent | `finetune_ar_mmi.py`, `runs/ar_mmi/`, `runs/rescorer_ar_mmi/` |
 | 49 | is there a cleaner join than n-best → rescorer → lattice → deferred layer? — fused sentence-beam (one search, LM in the loop, commitment = pruning lag) × prior-algebra grid on Modal A10Gs, 45 configs, same MMI deep lists (64 cands/swipe, ceiling 98.33 vs 97.85@8) | **yes, to within the rescorer's +0.11: fused + delta-form LM = 94.62 joint vs the three-pass 94.73, with no rescorer, no separate deferred pass, one score formula.** The grid is a controlled demonstration of prior algebra: raw LM + unigram degrades monotonically with LM weight (93.89 → 92.65 — #10's lesson reproduced at scale); subtracting a prior *once* fixes it, either the decoder's internal LM (HAT-style, zero-memory ablation, 94.53, flat ridge λ 0.3–0.4 · μ 0.8) or the LM's own unigram (delta form, 94.62); subtracting *both* collapses to 93.59 — the subtractions are alternatives, not complements. Deep lists pay +0.2 only under correct algebra (~0 under raw); zero-ablation beats mean everywhere. Commitment lags come free from the same beam: lag 0 = streaming, 1 = lookahead, ∞ = joint | `export_fused_bundle.py`, `modal_fused_search.py`, `probe_ilm_fusion.py`, `runs/fused_modal*.log` |
+| 50 | the invariance thread's closing number: shape-only AR lists through the identical fused stack | **90.94 joint vs canonical's 94.62 — the fully-realistic price of translation+scale invariance is 3.7 points**, down from 8.0 at the beam. Deep lists lift the shape ceiling to 97.56 (from 96.1@8 — coverage was never the problem), context converts 6.5 of the 8 beam points (vs 2.2 for canonical: the LM does 3× the work when acoustics can't separate congruent twins), and the streaming→joint spread triples (3.1 vs 1.0 — right context matters most exactly where evidence is weakest). μ optimum stays 0.8 even here — more LM *work*, not more LM *weight*. ILM subtraction loses to delta by 0.9 on shape (vs 0.1 canonical): the 25% of tokens without sentence context have nothing but the prior, and shape has no acoustics to catch them. The residual 3.7 is the theory's irreducible set — context-free positions and context-indifferent contests | `runs/fused_shape_delta.log`, `runs/fused_shape_ilm.log` |
 
 Standing conclusions the log supports:
 
