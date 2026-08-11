@@ -58,7 +58,14 @@ def main() -> None:
     ap.add_argument("--train-path", default="futo/train",
                     help="training corpus, relative to --cache; lets a "
                          "synthetic corpus (e.g. minjerk/train) stand in "
-                         "for the real one")
+                         "for the real one. Comma-separated specs mix "
+                         "corpora, an optional :N suffix truncates one — "
+                         "'futo/train:9000,minjerk_rand/train' is the "
+                         "1%%-real mixing arm")
+    ap.add_argument("--init", default=None,
+                    help="checkpoint to initialize weights from (synthetic "
+                         "pretrain -> real fine-tune); normalization "
+                         "buffers come with it and are not refit")
     ap.add_argument("--out", default="runs/ar")
     ap.add_argument("--epochs", type=int, default=10)
     ap.add_argument("--batch-size", type=int, default=256)
@@ -98,8 +105,13 @@ def main() -> None:
 
     print(f"device: {device}")
     t0 = time.time()
-    train_corpus = SwipeCorpus.load(cache_root / args.train_path, kb.letters,
-                                    limit=args.train_limit)
+    parts = []
+    for spec in args.train_path.split(","):
+        path, _, n = spec.partition(":")
+        parts.append(SwipeCorpus.load(cache_root / path, kb.letters,
+                                      limit=int(n) if n else args.train_limit))
+        print(f"  {spec}: {len(parts[-1]):,} swipes")
+    train_corpus = SwipeCorpus.concat(parts)
     print(f"train: {len(train_corpus):,} swipes  ({time.time() - t0:.0f}s)")
 
     from swipe_typing.augment import DEFAULT as DEFAULT_AUG
@@ -140,9 +152,15 @@ def main() -> None:
     model = ARSwipeDecoder(cfg).to(device)
     print(f"params: {model.num_parameters():,}")
 
-    print("fitting input normalization...")
-    fit_normalization(model, train_loader)
-    model.to(device)
+    if args.init:
+        ck = torch.load(args.init, map_location="cpu", weights_only=False)
+        model.load_state_dict(ck["model"])
+        model.to(device)
+        print(f"initialized from {args.init}")
+    else:
+        print("fitting input normalization...")
+        fit_normalization(model, train_loader)
+        model.to(device)
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr,
                             weight_decay=args.weight_decay)

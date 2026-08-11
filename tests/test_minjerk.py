@@ -89,6 +89,27 @@ def test_generate_many_deterministic(kb):
     assert all(np.array_equal(x.x, y.x) for x, y in zip(a, b))
 
 
+def test_randomized_still_plausible(kb):
+    m = minjerk.MinJerkModel(m=330.0, n=0.3, log_sigma=0.4,
+                             offset_sigma_x=0.4, offset_sigma_y=0.2,
+                             aspect=2.4, profile="random", dwell_prob=0.6,
+                             tremor=0.2, seg_jitter=0.25)
+    rng = np.random.default_rng(6)
+    base = minjerk.MinJerkModel(**{**m.__dict__, "dwell_prob": 0.0,
+                                   "tremor": 0.0, "seg_jitter": 0.0,
+                                   "log_sigma": 0.0, "profile": "spline"})
+    for word in ["hello", "minimum", "ll", "a"]:
+        sw = minjerk.generate(m, word, kb, rng)
+        assert is_plausible(sw)
+        assert np.all(np.diff(sw.t) >= 0)
+    # dwell pauses lengthen the gesture on average
+    durs = [minjerk.generate(m, "hello", kb, rng).duration_ms
+            for _ in range(30)]
+    base_durs = [minjerk.generate(base, "hello", kb, rng).duration_ms
+                 for _ in range(30)]
+    assert np.mean(durs) > np.mean(base_durs)
+
+
 def test_model_roundtrip(tmp_path, kb):
     p = tmp_path / "m.json"
     MODEL.save(p)

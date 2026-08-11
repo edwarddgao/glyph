@@ -98,8 +98,18 @@ class MinJerkModel:
     hz: float = features.RESAMPLE_HZ
     #: "spline" = global via-point minimum jerk (rounds corners, glides
     #: through letters); "segments" = rest-to-rest per segment (straight
-    #: lines, full stop at every via). Kept for the ablation.
+    #: lines, full stop at every via); "random" = per-gesture coin flip.
+    #: Kept separately for the ablation (#56: segments trains, spline
+    #: diverges).
     profile: str = "spline"
+    #: Domain-randomization knobs (#56's lesson read through sim2real: widen
+    #: the source distribution instead of chasing fidelity, so the decoder
+    #: cannot overfit any one temporal texture). All default off.
+    dwell_prob: float = 0.0      # P(pause) at each interior via
+    dwell_log_mu: float = 4.4    # ln ms; exp(4.4) ~ 80ms median pause
+    dwell_log_sigma: float = 0.7
+    tremor: float = 0.0          # smoothed touch noise, key half-widths
+    seg_jitter: float = 0.0      # per-segment lognormal duration sigma
 
     def save(self, path: str | Path) -> None:
         Path(path).write_text(json.dumps(asdict(self), indent=2))
@@ -191,28 +201,63 @@ def generate(model: MinJerkModel, word: str, layout: KeyboardLayout,
     vias = _via_points(word, layout, model, rng)
     seg_vec = np.diff(vias, axis=0)
     seg_len = np.linalg.norm(seg_vec * [model.aspect, 1.0], axis=1)
+    K = len(seg_len)
 
     seg_ms = np.maximum(model.m * seg_len**model.n, model.min_segment_ms)
+    if model.seg_jitter > 0 and K:
+        seg_ms *= np.exp(rng.normal(0.0, model.seg_jitter, K))
     seg_ms *= np.exp(rng.normal(0.0, model.log_sigma))
-    total = float(seg_ms.sum()) if len(seg_ms) else model.min_segment_ms
-    total = max(total, 4_000.0 / model.hz)  # >= 4 samples for is_plausible
-    bounds = np.concatenate([[0.0], np.cumsum(seg_ms)]) if len(seg_ms) \
-        else np.array([0.0, total])
 
-    n_out = max(int(round(total * model.hz / 1000.0)) + 1, 4)
-    t = np.linspace(0.0, bounds[-1] if len(seg_ms) else total, n_out)
-    if len(seg_ms):
-        seg_idx = np.clip(np.searchsorted(bounds, t, side="right") - 1,
-                          0, len(seg_ms) - 1)
-        tau = np.clip((t - bounds[seg_idx]) / seg_ms[seg_idx], 0.0, 1.0)
-        if model.profile == "segments":
+    if K:
+        bounds = np.concatenate([[0.0], np.cumsum(seg_ms)])
+        # Dwell pauses at interior vias, expressed as a piecewise-linear
+        # wall-clock -> path-time map: flat spans freeze the trajectory at
+        # the via while wall time advances.
+        wall_k, path_k = [0.0], [0.0]
+        held = 0.0
+        if model.dwell_prob > 0 and K >= 2:
+            hit = rng.random(K - 1) < model.dwell_prob
+            dur = np.exp(rng.normal(model.dwell_log_mu,
+                                    model.dwell_log_sigma, K - 1))
+            for i in range(1, K):
+                if hit[i - 1]:
+                    wall_k += [bounds[i] + held, bounds[i] + held + dur[i - 1]]
+                    path_k += [bounds[i], bounds[i]]
+                    held += dur[i - 1]
+        wall_k.append(bounds[-1] + held)
+        path_k.append(bounds[-1])
+        total = wall_k[-1]
+
+        n_out = max(int(round(total * model.hz / 1000.0)) + 1, 4)
+        t = np.linspace(0.0, total, n_out)
+        ptime = np.interp(t, wall_k, path_k)
+        seg_idx = np.clip(np.searchsorted(bounds, ptime, side="right") - 1,
+                          0, K - 1)
+        tau = np.clip((ptime - bounds[seg_idx]) / seg_ms[seg_idx], 0.0, 1.0)
+        profile = model.profile
+        if profile == "random":
+            profile = "segments" if rng.random() < 0.5 else "spline"
+        if profile == "segments":
             pts = vias[seg_idx] + seg_vec[seg_idx] * _minjerk_s(tau)[:, None]
         else:
             coeffs = _minjerk_spline(vias, seg_ms / 1000.0)
             pts = np.einsum("kic,ki->kc", coeffs[seg_idx],
                             tau[:, None] ** np.arange(6))
     else:
+        total = max(model.min_segment_ms, 4_000.0 / model.hz)
+        n_out = max(int(round(total * model.hz / 1000.0)) + 1, 4)
+        t = np.linspace(0.0, total, n_out)
         pts = np.repeat(vias[:1], n_out, axis=0)
+
+    if model.tremor > 0:
+        kw = features.key_scale(layout.radii)
+        noise = rng.normal(0.0, 1.0, pts.shape) * (model.tremor * kw)
+        if len(pts) >= 5:  # convolve(mode="same") needs signal >= kernel
+            kernel = np.hanning(5)
+            kernel /= kernel.sum()
+            noise[:, 0] = np.convolve(noise[:, 0], kernel, mode="same")
+            noise[:, 1] = np.convolve(noise[:, 1], kernel, mode="same")
+        pts = pts + noise
 
     return Swipe(
         word=word, x=pts[:, 0].astype(np.float32),

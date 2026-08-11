@@ -61,6 +61,28 @@ class SwipeCorpus:
                                max_word_len=max_word_len, origin=str(path))
 
     @classmethod
+    def concat(cls, corpora: list["SwipeCorpus"]) -> "SwipeCorpus":
+        """Merge corpora into one flat store (e.g. real + synthetic)."""
+        if len(corpora) == 1:
+            return corpora[0]
+        offsets = [np.asarray([0], dtype=np.int64)]
+        base = 0
+        for c in corpora:
+            offsets.append(c.offsets[1:] + base)
+            base += c.offsets[-1]
+        return cls(
+            np.concatenate([c.x for c in corpora]),
+            np.concatenate([c.y for c in corpora]),
+            np.concatenate([c.t for c in corpora]),
+            np.concatenate(offsets),
+            [w for c in corpora for w in c.words],
+            np.concatenate([c.aspects for c in corpora]),
+            [s for c in corpora for s in c.sessions],
+            [s for c in corpora for s in c.sentences],
+            np.concatenate([c.word_idx for c in corpora]),
+        )
+
+    @classmethod
     def from_swipes(cls, swipes, alphabet: str, limit: int | None = None,
                     max_word_len: int = MAX_WORD_LEN,
                     origin: str = "<swipes>") -> "SwipeCorpus":

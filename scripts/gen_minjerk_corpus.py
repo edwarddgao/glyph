@@ -30,14 +30,19 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--profile", default=None,
-                    choices=["spline", "segments"],
+                    choices=["spline", "segments", "random"],
                     help="override the model's trajectory profile")
+    ap.add_argument("--dwell-prob", type=float, default=None)
+    ap.add_argument("--tremor", type=float, default=None)
+    ap.add_argument("--seg-jitter", type=float, default=None)
     args = ap.parse_args()
 
     kb = KeyboardLayout.qwerty()
     model = minjerk.MinJerkModel.load(args.model)
-    if args.profile:
-        model.profile = args.profile
+    for k in ("profile", "dwell_prob", "tremor", "seg_jitter"):
+        v = getattr(args, k)
+        if v is not None:
+            setattr(model, k, v)
     train = SwipeCorpus.load(Path(args.cache) / "futo/train", kb.letters,
                              limit=args.limit)
     print(f"generating {len(train):,} synthetic swipes ...")

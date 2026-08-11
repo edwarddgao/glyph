@@ -71,6 +71,11 @@ def main() -> None:
     ap.add_argument("--decode-limit", type=int, default=3000)
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--out", default="runs/minjerk_model.json")
+    ap.add_argument("--profile", default=None,
+                    choices=["spline", "segments", "random"])
+    ap.add_argument("--dwell-prob", type=float, default=None)
+    ap.add_argument("--tremor", type=float, default=None)
+    ap.add_argument("--seg-jitter", type=float, default=None)
     args = ap.parse_args()
 
     kb = KeyboardLayout.qwerty()
@@ -81,6 +86,10 @@ def main() -> None:
     train = SwipeCorpus.load(root / "futo/train", kb.letters,
                              limit=args.fit_limit)
     model = minjerk.fit(train, kb, max_swipes=args.fit_limit)
+    for k in ("profile", "dwell_prob", "tremor", "seg_jitter"):
+        v = getattr(args, k)
+        if v is not None:
+            setattr(model, k, v)
     model.save(args.out)
     print(f"  m={model.m:.1f}  n={model.n:.2f}  log_sigma={model.log_sigma:.3f}"
           f"  offset_sigma=({model.offset_sigma_x:.3f}, "
