@@ -241,6 +241,11 @@ def make_loader(dataset: SwipeDataset, batch_size: int = 256, shuffle: bool = Tr
         num_workers=num_workers,
         collate_fn=collate,
         drop_last=shuffle,
-        persistent_workers=num_workers > 0,
+        # Training loaders must respawn workers each epoch: the trainers write
+        # `dataset.seed = epoch + 1` between epochs, and a persistent worker
+        # holds the pickled dataset from before epoch 0, freezing every
+        # augmentation draw for the whole run. Eval loaders never reseed, so
+        # they keep the persistence win.
+        persistent_workers=num_workers > 0 and not shuffle,
         **kwargs,
     )

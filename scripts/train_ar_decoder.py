@@ -55,6 +55,10 @@ def evaluate(model, loader, device, alphabet, max_batches=40):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cache", default="data/canonical")
+    ap.add_argument("--train-path", default="futo/train",
+                    help="training corpus, relative to --cache; lets a "
+                         "synthetic corpus (e.g. minjerk/train) stand in "
+                         "for the real one")
     ap.add_argument("--out", default="runs/ar")
     ap.add_argument("--epochs", type=int, default=10)
     ap.add_argument("--batch-size", type=int, default=256)
@@ -74,6 +78,11 @@ def main() -> None:
     ap.add_argument("--eval-batches", type=int, default=40)
     ap.add_argument("--no-augment", action="store_true")
     ap.add_argument("--shape-only", action="store_true")
+    ap.add_argument("--permute-prob", type=float, default=0.0,
+                    help="fraction of training samples relabelled under a "
+                         "random letter permutation of the layout (#37's "
+                         "recipe; dilutes the implicit LM in both the "
+                         "affinity reading and the AR head)")
     ap.add_argument("--anchor-jitter", type=float, default=0.0,
                     help="std (keys) of gesture-only translation during "
                          "training; the layout stays put. Partial-invariance "
@@ -89,7 +98,7 @@ def main() -> None:
 
     print(f"device: {device}")
     t0 = time.time()
-    train_corpus = SwipeCorpus.load(cache_root / "futo/train", kb.letters,
+    train_corpus = SwipeCorpus.load(cache_root / args.train_path, kb.letters,
                                     limit=args.train_limit)
     print(f"train: {len(train_corpus):,} swipes  ({time.time() - t0:.0f}s)")
 
@@ -101,6 +110,7 @@ def main() -> None:
         resample_mode=args.resample_mode,
         shape_only=args.shape_only,
         anchor_jitter=args.anchor_jitter,
+        permute_prob=args.permute_prob,
     )
     train_loader = make_loader(train_ds, batch_size=args.batch_size,
                                num_workers=args.workers)
