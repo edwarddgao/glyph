@@ -105,25 +105,39 @@ def main() -> None:
 
     print(f"device: {device}")
     t0 = time.time()
-    parts = []
-    for spec in args.train_path.split(","):
-        path, _, n = spec.partition(":")
-        parts.append(SwipeCorpus.load(cache_root / path, kb.letters,
-                                      limit=int(n) if n else args.train_limit))
-        print(f"  {spec}: {len(parts[-1]):,} swipes")
-    train_corpus = SwipeCorpus.concat(parts)
-    print(f"train: {len(train_corpus):,} swipes  ({time.time() - t0:.0f}s)")
+
+    def resolve_layout(name: str) -> KeyboardLayout:
+        if not name or name == "qwerty":
+            return kb
+        from swipe_typing.sources import futo
+        return KeyboardLayout.from_futo_json(
+            futo.download_layout(name)).reindex(kb.letters)
 
     from swipe_typing.augment import DEFAULT as DEFAULT_AUG
 
-    train_ds = SwipeDataset(
-        train_corpus, kb,
-        augment_cfg=None if args.no_augment else DEFAULT_AUG,
-        resample_mode=args.resample_mode,
-        shape_only=args.shape_only,
-        anchor_jitter=args.anchor_jitter,
-        permute_prob=args.permute_prob,
-    )
+    # Spec grammar: path[@layout][:N]. The layout is what the sample is
+    # featurized against — mixing specs with different layouts trains one
+    # decoder across keyboards (each dataset yields identical feature/target
+    # shapes, so plain concatenation works).
+    train_sets, n_total = [], 0
+    for spec in args.train_path.split(","):
+        path, _, n = spec.partition(":")
+        path, _, layout_name = path.partition("@")
+        corpus = SwipeCorpus.load(cache_root / path, kb.letters,
+                                  limit=int(n) if n else args.train_limit)
+        train_sets.append(SwipeDataset(
+            corpus, resolve_layout(layout_name),
+            augment_cfg=None if args.no_augment else DEFAULT_AUG,
+            resample_mode=args.resample_mode,
+            shape_only=args.shape_only,
+            anchor_jitter=args.anchor_jitter,
+            permute_prob=args.permute_prob,
+        ))
+        n_total += len(corpus)
+        print(f"  {spec}: {len(corpus):,} swipes")
+    print(f"train: {n_total:,} swipes  ({time.time() - t0:.0f}s)")
+    train_ds = (train_sets[0] if len(train_sets) == 1
+                else torch.utils.data.ConcatDataset(train_sets))
     train_loader = make_loader(train_ds, batch_size=args.batch_size,
                                num_workers=args.workers)
 
@@ -179,7 +193,8 @@ def main() -> None:
     best = float("inf")
 
     for epoch in range(args.epochs):
-        train_ds.seed = epoch + 1
+        for ds in train_sets:
+            ds.seed = epoch + 1
         model.train()
         running, seen, t_epoch = 0.0, 0, time.time()
 

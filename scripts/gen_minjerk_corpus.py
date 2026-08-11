@@ -35,9 +35,19 @@ def main() -> None:
     ap.add_argument("--dwell-prob", type=float, default=None)
     ap.add_argument("--tremor", type=float, default=None)
     ap.add_argument("--seg-jitter", type=float, default=None)
+    ap.add_argument("--layout", default=None,
+                    help="generate on a futo layout (dvorak, clearflow, ...) "
+                         "instead of qwerty — synthetic onboarding for a "
+                         "layout with no real gestures. The fitted duration "
+                         "law transfers: segment lengths come from the "
+                         "target layout's own geometry")
     args = ap.parse_args()
 
     kb = KeyboardLayout.qwerty()
+    if args.layout:
+        from swipe_typing.sources import futo
+        kb = KeyboardLayout.from_futo_json(
+            futo.download_layout(args.layout)).reindex(kb.letters)
     model = minjerk.MinJerkModel.load(args.model)
     for k in ("profile", "dwell_prob", "tremor", "seg_jitter"):
         v = getattr(args, k)
