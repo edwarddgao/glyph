@@ -64,6 +64,7 @@ KNOWN = {
     "gesturegen": (0.263, 0.508),     # learned v1, free-running regression
     "gesturegen_mdn": (0.280, 0.343),  # learned v2, MDN steps
     "gesturegen_warp": (0.552, 0.825),  # learned v3, prototype + time warp
+    "gesturediff": (0.737, 0.854),    # diffusion, ties the analytic generator
     "futo": (0.867, 0.924),           # real data, the top of the scale (#46)
 }
 
@@ -112,6 +113,30 @@ def shape_stats(pts: np.ndarray, words: list[str], kb: KeyboardLayout) -> dict:
         "turn": float(turn.mean()),
         "zigzag": sign_flips,
     }
+
+
+def diversity(corpus: SwipeCorpus, kb, max_words: int = 300) -> float:
+    """Mean within-word spread, as a fraction of a key width.
+
+    A collapsed latent gives one gesture per word; real users give a cloud.
+    Reported next to the real corpus's own value, so "too uniform" and "too
+    scattered" are both visible — the former is posterior collapse (a bug),
+    the latter is a prior that has stopped respecting the word.
+    """
+    from collections import defaultdict
+    by_word = defaultdict(list)
+    for i in range(len(corpus)):
+        w = corpus.words[i]
+        if len(by_word[w]) < 8:
+            by_word[w].append(i)
+    spreads = []
+    for w, idx in by_word.items():
+        if len(idx) < 2 or len(spreads) >= max_words:
+            continue
+        pts = resampled(corpus, idx)
+        spreads.append(float(np.linalg.norm(pts - pts.mean(0), axis=-1).mean()))
+    kw = float(features.key_scale(kb.radii).mean())
+    return float(np.mean(spreads) / kw) if spreads else float("nan")
 
 
 def c2st(real: np.ndarray, synth: np.ndarray, device, epochs: int = 30) -> float:
@@ -209,8 +234,8 @@ def evaluate(path: Path, kb, device, args) -> dict:
                            limit=args.stat_n * 3)
     vidx = [i for i in range(len(val))
             if 3 <= len(val.words[i]) <= 8][:args.stat_n]
-    row["c2st_auc"] = round(
-        c2st(resampled(val, vidx), pts, device), 4)
+    row["c2st_auc"] = round(c2st(resampled(val, vidx), pts, device), 4)
+    row["diversity"] = round(diversity(corpus, kb), 4)
     row.update(proxy_utility(path, kb, device, args))
     return {k: (round(v, 4) if isinstance(v, float) else v)
             for k, v in row.items()}
@@ -240,7 +265,7 @@ def main() -> None:
 
     rows = {}
     hdr = ("corpus            path  end    visit  dwell  turn  zig   c2st  "
-           "proxy   (secs)")
+           "div   proxy   (secs)")
     print(hdr)
     print("-" * len(hdr))
     for p in targets:
@@ -250,7 +275,8 @@ def main() -> None:
         print(f"{name:<16} {r['path_ratio']:.2f}  {r['end_err']:.3f}  "
               f"{r['visit']:.3f}  {r['dwell']:.3f}  {r['turn']:.2f}  "
               f"{r['zigzag']:.2f}  {r['c2st_auc']:.3f}  "
-              f"{r['proxy_greedy']:.3f}   ({r['proxy_secs']}s)", flush=True)
+              f"{r['diversity']:.2f}  {r['proxy_greedy']:.3f}   "
+              f"({r['proxy_secs']}s)", flush=True)
 
     if args.calibrate:
         names = [n for n in rows if n in KNOWN]

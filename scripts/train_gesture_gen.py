@@ -101,10 +101,11 @@ def main() -> None:
     ap.add_argument("--beta-warmup-epochs", type=float, default=1.0)
     ap.add_argument("--free-bits", type=float, default=0.05)
     ap.add_argument("--prev-dropout", type=float, default=0.15)
-    ap.add_argument("--arch", default="ar", choices=["ar", "warp"],
+    ap.add_argument("--arch", default="ar", choices=["ar", "warp", "smooth"],
                     help="ar = free-running step decoder (v1/v2); "
                          "warp = prototype-anchored offsets + monotone "
-                         "time warp (v3, no accumulation)")
+                         "time warp (v3, no accumulation); smooth = v4, "
+                         "offsets restricted to a low-frequency basis")
     ap.add_argument("--mdn", type=int, default=0,
                     help="mixture components on the next-step displacement; "
                          "0 = L1 regression (mean-seeking, rolls out smooth)")
