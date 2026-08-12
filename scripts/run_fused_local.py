@@ -34,7 +34,16 @@ def main() -> None:
     ap.add_argument("--mode", default="uni")
     ap.add_argument("--mu", type=float, default=0.8)
     ap.add_argument("--m", type=int, default=8)
+    ap.add_argument("--alpha", type=float, default=ALPHA,
+                    help="external unigram weight in the acoustic score; "
+                         "dilution-trained first passes want more of it")
     ap.add_argument("--delta", action="store_true")
+    ap.add_argument("--lags", default="0,1,joint",
+                    help="comma list of commitment lags to run "
+                         "(0=streaming, 1=lookahead1, joint)")
+    ap.add_argument("--save-hyps", default=None,
+                    help="npz path; per-lag hypothesis arrays aligned to "
+                         "bundle order, for slice analyses")
     args = ap.parse_args()
 
     with open(args.bundle, "rb") as f:
@@ -86,7 +95,8 @@ def main() -> None:
     def acoustic(cl):
         out = []
         for w, ar, uni, ln in cl:
-            prior = ALPHA * uni if args.lam == 0.0 else -args.lam * ilm.get(w, 0.0)
+            prior = (args.alpha * uni if args.lam == 0.0
+                     else -args.lam * ilm.get(w, 0.0))
             out.append((w, ar + BETA * ln + prior))
         return out
 
@@ -117,20 +127,38 @@ def main() -> None:
                 states = [s for s in states if s[0][j] == w_commit] or states[:1]
         return list(states[0][0]) + [""] * (n_words - len(states[0][0]))
 
+    all_lags = {"0": (0, "streaming"), "1": (1, "lookahead1"),
+                "joint": (None, "joint")}
     t0 = time.time()
-    for lag, name in [(0, "streaming"), (1, "lookahead1"), (None, "joint")]:
+    hyps_out = {}
+    first = True
+    for key in args.lags.split(","):
+        lag, name = all_lags[key.strip()]
         hit = 0
+        hyps = [""] * n
         for gi, idx in enumerate(groups):
             out = decode(idx, lag)
-            hit += sum(w == refs[i] for w, i in zip(out, idx))
-            if name == "streaming" and gi % 400 == 0 and gi:
+            for w, i in zip(out, idx):
+                hyps[i] = w
+                hit += w == refs[i]
+            if first and gi % 400 == 0 and gi:
                 rate = gi / (time.time() - t0)
                 print(f"  {gi}/{len(groups)} sentences "
                       f"({len(cache):,} cached, "
                       f"eta this pass {(len(groups) - gi) / rate / 60:.0f}m)",
                       flush=True)
+        first = False
+        hyps_out[name] = hyps
         print(f"{name}: {hit / n:.4f}  ({time.time() - t0:.0f}s, "
               f"{len(cache):,} lm scores)", flush=True)
+
+    if args.save_hyps:
+        import numpy as np
+
+        np.savez_compressed(
+            args.save_hyps, refs=np.array(refs, dtype=object),
+            **{k: np.array(v, dtype=object) for k, v in hyps_out.items()})
+        print(f"wrote {args.save_hyps}")
 
     ceiling = sum(refs[i] in [w for w, *_ in lists[i][:args.m]]
                   for i in range(n)) / n
