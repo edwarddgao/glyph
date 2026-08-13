@@ -65,6 +65,7 @@ KNOWN = {
     "gesturegen_mdn": (0.280, 0.343),  # learned v2, MDN steps
     "gesturegen_warp": (0.552, 0.825),  # learned v3, prototype + time warp
     "gesturediff": (0.737, 0.854),    # diffusion, ties the analytic generator
+    "gmix_full": (0.799, 0.885),      # diffusion + min-jerk mixture, #65
     "futo": (0.867, 0.924),           # real data, the top of the scale (#46)
 }
 
