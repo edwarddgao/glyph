@@ -770,19 +770,37 @@ hypotheses alive across the sentence. #34 and #51 collapse into one statement:
 the flat ladder was never a fact about the model, it was a fact about what the
 model was allowed to decide.
 
-**Above gpt2-xl the ladder stops, on distribution rather than saturation.**
-Qwen3.5-9B-Base carries six times gpt2-xl's parameters and seven years of
-better-curated data, and lands 0.85 *below* it (p = 7.1e-06) — statistically
+**Above gpt2-xl the ladder does not climb on capability.** Qwen3.5-9B-Base
+carries six times gpt2-xl's parameters and seven years of better-curated data,
+and at the shared weight lands 0.85 *below* it (p = 7.1e-06) — statistically
 tied with 124M gpt2 (−0.21, p = 0.32). Its own family curve is already
 flattening (0.8B → 2B +1.78 at 8.1 SE; 2B → 9B +0.23 at 1.2 SE, n.s.), so the
-modern family is converging toward an asymptote *below* where 2019's WebText
-models already sit. This is the Qwen column above, reproduced in a role where
-it costs three times as much.
+modern family is converging toward an asymptote near, not past, where 2019's
+WebText models already sit. This is the Qwen column above, reproduced in a
+role that costs fifteen times as much to run.
 
-Not a weight artifact: μ=0.8 was tuned on gpt2, so each family got its own
-sweep on a nested 1/8 slice, and both want the weight the ladder already used
-— gpt2 94.12 / 94.56 / 94.56 and Qwen-2B 94.28 / 94.60 / 94.64 at μ = 0.2 /
-0.4 / 0.8. The mismatched family wants *more* LM, not less.
+Part of it *is* a weight artifact, and only the top rung shows it. μ=0.8 was
+tuned on gpt2, so every arm got its own sweep on a nested 1/8 slice (joint):
+
+| LM | μ=0.2 | μ=0.4 | μ=0.8 | μ=1.2 | μ=1.6 |
+|---|---|---|---|---|---|
+| gpt2 | 94.12 | 94.56 | **94.56** | — | — |
+| gpt2-large | 94.32 | 94.76 | **94.96** | — | — |
+| gpt2-xl | 94.32 | 94.72 | **95.04** | 94.64 | 93.88 |
+| Qwen3.5-2B-Base | 94.28 | 94.60 | **94.64** | — | — |
+| Qwen3.5-9B-Base | 94.40 | **95.04** | 94.72 | — | — |
+
+Every GPT-2 rung peaks at the weight the ladder used, and xl's fall-back at
+1.2 and 1.6 makes that an interior optimum rather than a truncated curve. So
+does Qwen-2B — the mismatched small model wants *more* LM, not less, so its
+deficit is not an over-weighting. Qwen-9B is the exception: it peaks at μ=0.4,
+worth +0.32 over μ=0.8 here (1.3 SE, p=0.27 — suggestive, not established),
+and at that weight it reaches 95.04, **exactly gpt2-xl's best on the same
+words**. The only modern rung that wants a lighter touch is the one strong
+enough for its opinions to be worth having, and giving it one buys parity —
+for 6× the parameters and 15× the decode time. Whether that tie survives a
+properly powered slice is the open rung; the 1/8 slice's ±0.25 paired SE
+cannot separate it from gpt2-xl's 0.85-point lead at matched weight.
 
 **Authority amplifies the mismatch in both directions.** Qwen3.5-0.8B in-search
 is worth less than no language model at all — 92.39 against the 92.53 the same
@@ -1244,7 +1262,7 @@ commit messages.
 | 63 | can a *learned* generator beat the analytic one? — WordGesture-GAN (CHI'23) read for the recipe, then five architectures against it, all judged synthetic-only on real val: v1 free-running regression, v2 Graves-style MDN steps, v3 prototype + monotone time warp, v4 v3 with offsets in a low-frequency basis, and a trajectory diffusion model; plus the published method implemented to spec | **yes, eventually — diffusion ties min-jerk at 85.43 vs 85.65 beam, after three architectures that failed on geometry rather than texture.** The failure axis is accumulation: v1's mean-seeking steps compound into a path *shorter than the polyline through its own letters* (0.86x, so it cuts corners and strands the gesture before the last key — caught by eye before any metric flagged it), v2's sampled steps compound into a random walk (path 5-15x, off the keyboard) and score *below* v1 despite better texture. v3 removes integration entirely (curve = prototype + offsets, sampled at a monotone warp normalized to end at 1, so reaching the last letter is structurally guaranteed): +32 beam. Diffusion denoises all 64 points jointly — same immunity, no mode-averaging — and lands nearest real on every geometry statistic (path 1.10 vs 1.10, end-err 0.060 vs 0.067, C2ST 0.61 against a 0.51 real-vs-real floor, where min-jerk sits at 0.77). Published WGG to spec: proxy 0.347, below every arm here, though its critic was still winning at cutoff — undertrained, not refuted | `model/gesturegen.py`, `model/gesturediff.py`, `model/wgg.py`, `runs/ar_gen*`, `runs/gesturediff*` |
 | 64 | the controls that make #63 a claim rather than an anecdote: (a) a 3-minute quality oracle — geometry/texture/shape stats, a real-vs-synthetic classifier, within-word diversity, and a *proxy decoder* (96-dim, 3 epochs, 120k gestures, greedy on real val) — calibrated against six corpora with known full-scale numbers; (b) the reconstruction ceiling: encode real gestures, decode the posterior mean, train on that | **(a) the proxy tracks full-scale beam at Spearman 0.94 (0.77 vs greedy) for 1/30th the compute, and predicted diffusion's unseen 85.43 from 0.572 before it was run; (b) the warp family is capped by its parameterization, not its prior — reconstructions of *real* gestures score 0.531 proxy against the family's own sampled 0.521 and real data's 0.662, with dwell 0.159 vs real 0.229 even when copying a specific gesture.** So no better prior, GAN, or sampler could have rescued v3/v4, and diffusion — which has no such bottleneck — already scores past the ceiling. Diversity rules out posterior collapse everywhere (0.40-0.45 vs real 0.36). Third realism/utility inversion, this one costly: v4 fixed the zig-zag a human observer flagged in v3 (turn 0.11 vs 0.18, zigzag 0.14 vs 0.23, closer to real on both) and utility *fell* 0.521 -> 0.454 | `gen_quality.py --calibrate`, `gen_reconstruct_corpus.py`, `runs/gen_quality_calib.log` |
 | 65 | if realism and randomization are different goods, are they complementary? — 50/50 mixture of the diffusion corpus and the domain-randomized min-jerk corpus, 917k total, otherwise the identical synthetic-only protocol | **yes, and the mixture is the first synthetic corpus to clear 88: val beam 88.54 / greedy 79.9 (+2.9 over min-jerk's 85.65 and +3.1 over diffusion's 85.43), hws 75.5, truth-in-list 97.8 — 3.9 short of real data's 92.40 from gestures no human produced.** The parents are doing different jobs: diffusion supplies realistic geometry and timing (C2ST 0.61), min-jerk supplies variation so wide it leaves the keyboard (path 1.76x, turn 0.92 vs real 0.27) and prevents the decoder leaning on any one regularity. Neither substitutes for the other, which the sampling sweep confirms from the other side: raising diffusion's own stochasticity (eta 0 -> 1) moved the proxy not at all (0.572 -> 0.572), because within-distribution noise is not the out-of-distribution randomization that does the work; 200 denoising steps bought +0.016, a fidelity gain. Recipe for synthetic gesture data as of now: learn one generator, hand-build a deliberately unrealistic one, mix them | `runs/ar_gen_mix*`, `runs/quality_gmix.json` |
-| 66 | **#51's reopened ladder, climbed: the LM-scale ladder run *in-search* instead of as a second pass** — seven models on the byte-identical fused bundle at one config (M=8, delta, μ=0.8, α=0.4, beam 8, all three lags), fixed 3-of-8 val slice, every comparison paired (McNemar over discordant words, not the unpaired SE) | **scale pays in-search where it was flat as a rescorer, and the payment is authority: gpt2 → xl is −0.08 at streaming (p=0.66), +0.31 at lookahead-1, +0.64 at joint (p=3.1e-05).** The GPT-2 family rises monotonically (94.60 / 94.83 / 95.13 / 95.24) converting 41–54% of headroom against 25–29% as rescorers, and is *flat at streaming* — #51's endpoint result was a real slope, and the slope only exists where the LM can prune. **Above xl the ladder stops on distribution, not saturation:** Qwen3.5-9B, 6× xl's parameters and two generations newer, scores 94.39 — 0.85 *below* xl (p=7.1e-06), tied with 124M gpt2 (p=0.32), its own curve already flattening (2B→9B +0.23, n.s.). Not a weight artifact (both families sweep to the same μ=0.8 optimum; the mismatched one wants *more* LM). Authority amplifies mismatch symmetrically: Qwen-0.8B, worth +0.9 as a rescorer (#34), is worth **less than no LM at all** in-search (92.39 vs 92.53) — pruning is irreversible in a way reranking is not. The deficit is entirely mid/tail frequency (−1.06/−1.42 vs xl, head ±0.00): not grammar, but which uncommon word this corpus uses | `run_fused_local.py --lags --mus`, `compare_hyps.py`, `runs/ladder_*.log`, `runs/musweep_*.log` |
+| 66 | **#51's reopened ladder, climbed: the LM-scale ladder run *in-search* instead of as a second pass** — seven models on the byte-identical fused bundle at one config (M=8, delta, μ=0.8, α=0.4, beam 8, all three lags), fixed 3-of-8 val slice, every comparison paired (McNemar over discordant words, not the unpaired SE) | **scale pays in-search where it was flat as a rescorer, and the payment is authority: gpt2 → xl is −0.08 at streaming (p=0.66), +0.31 at lookahead-1, +0.64 at joint (p=3.1e-05).** The GPT-2 family rises monotonically (94.60 / 94.83 / 95.13 / 95.24) converting 41–54% of headroom against 25–29% as rescorers, and is *flat at streaming* — #51's endpoint result was a real slope, and the slope only exists where the LM can prune. **Above xl the ladder does not climb on capability:** Qwen3.5-9B, 6× xl's parameters and two generations newer, scores 94.39 at matched weight — 0.85 *below* xl (p=7.1e-06), tied with 124M gpt2 (p=0.32), its own curve already flattening (2B→9B +0.23, n.s.). The per-model μ sweep splits that finding rather than confirming it: every GPT-2 rung and Qwen-2B peak at the ladder's μ=0.8 (xl falls back at 1.2 and 1.6, so it is a true optimum), but 9B peaks at 0.4 and there *ties gpt2-xl exactly* (95.04 both, 1/8 slice) — so the honest reading is that the modern family reaches parity, not past it, and pays 6× the parameters and 15× the decode time for it. A powered run of 9B at its own μ on the full slice is the open rung. Authority amplifies mismatch symmetrically: Qwen-0.8B, worth +0.9 as a rescorer (#34), is worth **less than no LM at all** in-search (92.39 vs 92.53) — pruning is irreversible in a way reranking is not. The deficit is entirely mid/tail frequency (−1.06/−1.42 vs xl, head ±0.00): not grammar, but which uncommon word this corpus uses | `run_fused_local.py --lags --mus`, `compare_hyps.py`, `runs/ladder_*.log`, `runs/musweep_*.log` |
 
 Standing conclusions the log supports:
 
