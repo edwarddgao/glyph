@@ -689,6 +689,11 @@ to 9B — 70× the parameters, two model generations — every result lands in a
 here; the 4B's dip below the 2B is noise, not an inversion). The best model
 on the entire ladder is 2019's gpt2-xl, and Qwen3.5-9B ties gpt2-medium.
 
+*(The scale half of this is a claim about the **role**, not the model: run
+the same ladder inside the search and the GPT-2 family stops being flat —
+see "The same ladder, climbed inside the search". The Qwen half survives
+both roles.)*
+
 **Distribution match beats capability.** The Qwen column is the sharper
 finding: modern curated pretraining is mildly *mismatched* to lowercase,
 casing-free conversational fragments, and it takes ~9B parameters to climb
@@ -710,6 +715,112 @@ have been published. The one documented route past a selection ceiling is
 right context and cross-hypothesis correction (Gboard post-correction,
 −2.31 gesture WER; HyPoradise, NeurIPS 2023) — precisely the lever #30–33
 measure here.
+
+### The same ladder, climbed inside the search
+
+```bash
+python scripts/run_fused_local.py --bundle fused_bundle_val38.pkl \
+    --lm gpt2-xl --m 8 --mu 0.8 --delta --lags 0,1,joint \
+    --save-hyps runs/hyps_ladder_xl.npz
+python scripts/compare_hyps.py runs/hyps_ladder_g2.npz runs/hyps_ladder_xl.npz
+```
+
+The table above prices LM scale as a *second pass*. #51 measured the same
+gpt2 → gpt2-xl swap *inside* the fused search and got +0.43 against that
+role's ~+0.2, which reopened the ladder — but from two endpoints only, and
+with nothing above 1.5B, where the GPT-2 family ends and any further rung has
+to change family into exactly the mismatch this section documents.
+
+Every rung decodes the byte-identical bundle at one config — AR-MMI deep
+lists, M=8, delta form, μ=0.8, α=0.4, β=1.2, beam 8 — over a fixed 3-of-8
+slice of validation (795 sentences, 7,539 words; no LM 92.53, ceiling@8
+97.59, so 5.06 points of headroom). The arms rank the same lists, so the
+comparisons are paired: McNemar over the words two arms decode differently,
+not the ±0.16 unpaired SE.
+
+| LM | params | vintage | streaming | lookahead-1 | joint | headroom |
+|---|---|---|---|---|---|---|
+| *(no LM)* | — | — | 92.53 | — | — | — |
+| gpt2 | 124M | 2019 | 93.92 | 94.43 | 94.60 | 41% |
+| gpt2-medium | 355M | 2019 | 93.63 | 94.39 | 94.83 | 45% |
+| gpt2-large | 774M | 2019 | 94.07 | 94.71 | 95.13 | 51% |
+| gpt2-xl | 1.5B | 2019 | 93.85 | 94.73 | **95.24** | **54%** |
+| Qwen3.5-0.8B-Base | 0.8B | 2026 | 90.22 | 91.94 | 92.39 | −3% |
+| Qwen3.5-2B-Base | 2B | 2026 | 92.89 | 93.86 | 94.16 | 32% |
+| Qwen3.5-9B-Base | 9B | 2026 | 92.76 | 94.04 | 94.39 | 37% |
+
+**Within the family the slope is real.** 94.60 → 94.83 → 95.13 → 95.24 rises
+at every rung, +0.64 end to end at p = 3.1e-05 paired. #51's endpoint reading
+survives the interior, and in-search conversion (41–54% of headroom) runs
+roughly double the 25–29% the same models convert as rescorers.
+
+**The gain is authority, not ranking.** Split that swap by how much the LM is
+allowed to decide:
+
+| commitment | gpt2 | gpt2-xl | delta | paired p |
+|---|---|---|---|---|
+| streaming (lag 0) | 93.92 | 93.85 | −0.08 | 0.66 |
+| lookahead-1 | 94.43 | 94.73 | +0.31 | 0.058 |
+| joint | 94.60 | 95.24 | **+0.64** | 3.1e-05 |
+
+Given only the current word to score, twelve times the parameters is worth
+nothing, and the whole family is flat there (93.92 / 93.63 / 94.07 / 93.85, no
+trend). The value appears precisely as the LM gains the power to keep
+hypotheses alive across the sentence. #34 and #51 collapse into one statement:
+the flat ladder was never a fact about the model, it was a fact about what the
+model was allowed to decide.
+
+**Above gpt2-xl the ladder stops, on distribution rather than saturation.**
+Qwen3.5-9B-Base carries six times gpt2-xl's parameters and seven years of
+better-curated data, and lands 0.85 *below* it (p = 7.1e-06) — statistically
+tied with 124M gpt2 (−0.21, p = 0.32). Its own family curve is already
+flattening (0.8B → 2B +1.78 at 8.1 SE; 2B → 9B +0.23 at 1.2 SE, n.s.), so the
+modern family is converging toward an asymptote *below* where 2019's WebText
+models already sit. This is the Qwen column above, reproduced in a role where
+it costs three times as much.
+
+Not a weight artifact: μ=0.8 was tuned on gpt2, so each family got its own
+sweep on a nested 1/8 slice, and both want the weight the ladder already used
+— gpt2 94.12 / 94.56 / 94.56 and Qwen-2B 94.28 / 94.60 / 94.64 at μ = 0.2 /
+0.4 / 0.8. The mismatched family wants *more* LM, not less.
+
+**Authority amplifies the mismatch in both directions.** Qwen3.5-0.8B in-search
+is worth less than no language model at all — 92.39 against the 92.53 the same
+search reaches with the LM removed — while the table above measures that same
+checkpoint as a *rescorer* at +0.9 over its baseline. A reader that is merely
+mediocre when it can only reorder a finished list becomes destructive when it
+can prune the search, because what it kills never comes back. The lever that
+turns +0.2 into +0.64 for a matched model turns +0.9 into −0.14 for a
+mismatched one.
+
+Where the deficit lives says what it is. Bucketing by the target's unigram
+frequency, head words are at ceiling for every reader (99.3%) and the entire
+ladder is a fight over the rarer two thirds:
+
+| truth-frequency tercile | n | gpt2 | gpt2-xl | Qwen-2B | Qwen-9B |
+|---|---|---|---|---|---|
+| head | 2476 | 99.27 | 99.39 | 99.39 | 99.27 |
+| mid | 2463 | 97.97 | **98.50** | 97.44 | 97.44 |
+| tail | 2466 | 91.69 | **92.98** | 90.75 | 91.57 |
+
+Qwen-9B gives up its 0.85 to gpt2-xl entirely in mid (−1.06) and tail (−1.42)
+with head at ±0.00. The modern model is not failing at grammar; it is failing
+at which *uncommon* word this corpus uses — WebText is closer to Common Voice
+prompts than curated 2026 pretraining is.
+
+Two caveats and an ops note. The slice is 3/8 of validation, not the full 20k:
+the anchors read 94.60 and 95.24 against #51's full-val 94.45 and 94.88, so
+levels run a few tenths high and the slice's gpt2→xl gap is wider than full
+validation's +0.43 — read these deltas as slice deltas. All models run fp16
+including the bf16-native Qwen checkpoints, because bf16's 8-bit mantissa
+costs 0.15 nats of pure batch-order noise on MPS against fp16's 0.02 (fp32 is
+exactly batch-invariant, and 0.02 nats moves no decisions: the batched and
+per-state scorers agree word for word on both families). And #51's ops lesson
+half-inverts — the fused search is launch-bound only while the model is small.
+Scoring every live state in one forward makes it 2.4x faster and genuinely
+compute-bound by 9B, where one pass takes **9.2 hours on MPS against
+gpt2-xl's 35 minutes for identical work**; above ~2B, cloud parallelism is the
+right tool again.
 
 ## Second-pass acoustic rescoring
 
@@ -1129,10 +1240,11 @@ commit messages.
 | 59 | layout onboarding with zero real gestures: #57's randomized generator run on clearflow/dvorak/kasroz/qwertz geometry (200k each — the duration law and aiming noise are functions of the target layout, so they transfer by construction), ar_full fine-tuned on them + 200k real-qwerty replay; then the stacking cell, same recipe from ar_perm25 with permutation kept on | **synthetic geometry beats unlearning qwerty on 3 of 4 layouts — clearflow 94.1, kasroz 94.4 (vs perm-only's 90.3/91.1, reaching #38's perm-CTC gold 94.3/94.6 with no real target-layout data) — but dvorak refuses: 81.1, five under perm-only's 86.4, and the combo cell does not rescue it (82.9).** The dvorak anomaly is a ranking failure, not a coverage one: synthetic-tuned greedy 72.1 far above perm's 63.4 and hit@8 even (91.8 vs 92.7), yet beam top-1 inverts — the model reads dvorak gestures better and *ranks* their candidates worse. Combo elsewhere: clearflow 94.6, kasroz 94.7 (small stacks), qwertz flat, qwerty replay holds regression to −0.8 (swipe-5) / −1.1 (val beam 91.31). Deployment recipe as of now: synthetic onboarding for a new layout, permutation training only when the layout is unknown at training time — and dvorak stays an open case | `gen_minjerk_corpus.py --layout`, `train_ar_decoder.py` @layout specs, `runs/ar_layout_ft*` |
 | 60 | #36's actionable slice attacked directly: every wf320k word with ≤2 real training gestures — 269,089 words, 93% of the usable lexicon — given 2 randomized synthetic gestures each (uniform, not frequency-weighted: the trie supplies identity, gestures only teach geometry), ar_full fine-tuned on 538k tail + 200k replay, before/after n-best dumps bucketed by training count | **the intervention lands exactly on its target and pays a measurable head tax: hws unseen-word top-1 +9.8 (33.0 → 42.9), the in-lexicon count≤5 slice +7.5 (51.8 → 59.3, ~27 SE), in-beam +13.1 on unseen — while every bucket above count 5 loses 0.9–4.1 and the aggregate slips −0.6 (hws) / −0.9 (val).** Uniform tail coverage is implicit-LM dilution by other means (#37's mechanism through the data instead of the labels): probability mass moves from head to tail, and the head loss is exactly the kind the fused stack's external LM exists to absorb, while the tail gain — acoustic coverage — is the kind nothing downstream can substitute. Whether the trade nets positive end-to-end is a fused-stack question (dumps are ready); val shows the same shape smaller (its tail is out-of-lexicon proper nouns, #36's original diagnosis). First measured knob that moves the unseen-word bucket at all | `gen_minjerk_tail.py`, `runs/ar_tail_ft*`, `runs/tail_buckets_{val,hws}.log`, `data/nbest_{base,tailft}/` |
 | 61 | does the fused stack refund #60's head tax? — ar_full vs ar_tail_ft deep lists (M=24) through the identical fused sentence beam (gpt2, delta-form, μ=0.8), val + hws, per-word hyps bucketed; α ∈ {0.4, 0.8} both arms after spotting that the harness's hardcoded α=0.4 shortchanges a dilution-trained first pass | **no — the refund hypothesis is refuted at best-config-per-arm: val 94.53 → 94.18 (−0.35), hws 81.12 → 80.08 (−1.04).** The α interaction is real and diagnostic (0.8 lifts tail-ft +0.3, costs base −0.25/−0.7: the diluted model leans on the external unigram exactly as its α*=0.8 first-pass optimum said) but it halves the tax rather than erasing it. The slice structure survives fusion untouched — hws unseen **+7.3**, rare +3.0, head −1.6 at matched α — so the trade is now measured end-to-end: tail synthesis buys its coverage at a real, stack-surviving head price, and gpt2-scale context cannot overturn confident-wrong head rankings (#51's authority ladder suggests xl would refund more; untested). Breakeven arithmetic from the measured deltas: net ≈ 0 at ~23% tail mass — hws sits at 18.6% (−0.3 at matched α), futo val at 10% (clear loss). The mechanism works; the dose was wrong — 269k uniform tail words flatten the prior far past any real usage distribution. The dose-response (tail restricted to plausible words, 1 sample/word, lighter mix) is the open lever if tail coverage is ever wanted in the deployed stack | `run_fused_local.py --alpha --lags --save-hyps`, `runs/fused_{base,tailft}_{val,hws}*.log`, `runs/hyps_*.npz` |
-| 62 | the two cells that kept the synthetic-data question open: (a) full-real + 917k synthetic from scratch (does synthetic help at the 100% margin?); (b) #61's dose-response prediction — tail restricted to plausible words (top-50k wordfreq ∩ train-count≤2 = 29,200), one gesture each, 7% of a 400k-replay fine-tune instead of 73% | **(a) no — absorption law again: val greedy +1.3 (86.7 → 88.0, largest greedy in the log) but beam 92.46 vs 92.40 (wash) and hws beam −0.7; synthetic's value does not extend to the full-data margin. (b) yes — the sign flips exactly as the breakeven arithmetic predicted: hws +0.65 first-pass beam (unseen +3.1, rare +2.2, head flat), val −0.08 (noise), and through the fused stack +0.23 with the head at −0.07 and the deep ceiling +0.55.** #60's head tax was dose, not mechanism — priced at 73% tail fraction, eliminated at 7%. Standing recipe for tail coverage on qwerty: dose by expected usage mass, not lexicon size. The +0.65 → +0.23 compression is the familiar absorption: sentence context was already rescuing part of the tail; what synthesis adds end-to-end is the slice context can't reach plus list coverage (in-beam +7.6 unseen) the LM can rank later | `gen_minjerk_tail.py --wf 50000 --per-word 1`, `runs/ar_mix100*`, `runs/ar_tail50_ft*`, `runs/tail50_buckets_*.log`, `runs/fused_tail50_hws.log` |
+| 62 | the two cells that kept the synthetic thread open: (a) mix100 — full real corpus + the 917k randomized synthetic, from scratch, does synthetic help where real data is already abundant?; (b) #61's dose-response prediction — tail restricted to plausible words (top-50k wordfreq ∩ train-count≤2 = 29,200), one gesture each, 7% of a 400k-replay fine-tune instead of #60's 73% | **(a) no: val greedy jumps +1.3 (86.7 → 88.0, the biggest greedy in the log) and the beam absorbs every point of it (92.46 vs 92.40), hws beam slips −0.7 — the absorption law (#17/#18) one more time; synthetic's value does not extend to the full-data margin. (b) yes: the dose was the problem, exactly as #61's breakeven arithmetic said.** First pass: hws aggregate flips sign to **+0.65** (unseen +3.1, rare +2.2, head buckets flat), val −0.08 (noise). Through the fused stack: **+0.23 end-to-end** (81.12 → 81.35) with unseen +1.3, rare +1.8, head −0.07 — net positive, structurally clean, list ceiling +0.55. The dosed-tail recipe (plausible words only, 1 sample/word, light mix) earns a standing place; the uniform-lexicon dose stays refuted. Where the thread actually stands: synthetic replaces nothing, multiplies scarce real data (#58), onboards known geometry (#59), and covers plausible tails for ~free (#62b); still open — the DR-config sweep (85.65 is a floor, dwell/tremor were one guessed point), xl's refund authority, the learned generator | `runs/ar_mix100*`, `runs/ar_tail50_ft*`, `runs/tail50_buckets_*.log`, `runs/fused_tail50_hws.log` |
 | 63 | can a *learned* generator beat the analytic one? — WordGesture-GAN (CHI'23) read for the recipe, then five architectures against it, all judged synthetic-only on real val: v1 free-running regression, v2 Graves-style MDN steps, v3 prototype + monotone time warp, v4 v3 with offsets in a low-frequency basis, and a trajectory diffusion model; plus the published method implemented to spec | **yes, eventually — diffusion ties min-jerk at 85.43 vs 85.65 beam, after three architectures that failed on geometry rather than texture.** The failure axis is accumulation: v1's mean-seeking steps compound into a path *shorter than the polyline through its own letters* (0.86x, so it cuts corners and strands the gesture before the last key — caught by eye before any metric flagged it), v2's sampled steps compound into a random walk (path 5-15x, off the keyboard) and score *below* v1 despite better texture. v3 removes integration entirely (curve = prototype + offsets, sampled at a monotone warp normalized to end at 1, so reaching the last letter is structurally guaranteed): +32 beam. Diffusion denoises all 64 points jointly — same immunity, no mode-averaging — and lands nearest real on every geometry statistic (path 1.10 vs 1.10, end-err 0.060 vs 0.067, C2ST 0.61 against a 0.51 real-vs-real floor, where min-jerk sits at 0.77). Published WGG to spec: proxy 0.347, below every arm here, though its critic was still winning at cutoff — undertrained, not refuted | `model/gesturegen.py`, `model/gesturediff.py`, `model/wgg.py`, `runs/ar_gen*`, `runs/gesturediff*` |
 | 64 | the controls that make #63 a claim rather than an anecdote: (a) a 3-minute quality oracle — geometry/texture/shape stats, a real-vs-synthetic classifier, within-word diversity, and a *proxy decoder* (96-dim, 3 epochs, 120k gestures, greedy on real val) — calibrated against six corpora with known full-scale numbers; (b) the reconstruction ceiling: encode real gestures, decode the posterior mean, train on that | **(a) the proxy tracks full-scale beam at Spearman 0.94 (0.77 vs greedy) for 1/30th the compute, and predicted diffusion's unseen 85.43 from 0.572 before it was run; (b) the warp family is capped by its parameterization, not its prior — reconstructions of *real* gestures score 0.531 proxy against the family's own sampled 0.521 and real data's 0.662, with dwell 0.159 vs real 0.229 even when copying a specific gesture.** So no better prior, GAN, or sampler could have rescued v3/v4, and diffusion — which has no such bottleneck — already scores past the ceiling. Diversity rules out posterior collapse everywhere (0.40-0.45 vs real 0.36). Third realism/utility inversion, this one costly: v4 fixed the zig-zag a human observer flagged in v3 (turn 0.11 vs 0.18, zigzag 0.14 vs 0.23, closer to real on both) and utility *fell* 0.521 -> 0.454 | `gen_quality.py --calibrate`, `gen_reconstruct_corpus.py`, `runs/gen_quality_calib.log` |
 | 65 | if realism and randomization are different goods, are they complementary? — 50/50 mixture of the diffusion corpus and the domain-randomized min-jerk corpus, 917k total, otherwise the identical synthetic-only protocol | **yes, and the mixture is the first synthetic corpus to clear 88: val beam 88.54 / greedy 79.9 (+2.9 over min-jerk's 85.65 and +3.1 over diffusion's 85.43), hws 75.5, truth-in-list 97.8 — 3.9 short of real data's 92.40 from gestures no human produced.** The parents are doing different jobs: diffusion supplies realistic geometry and timing (C2ST 0.61), min-jerk supplies variation so wide it leaves the keyboard (path 1.76x, turn 0.92 vs real 0.27) and prevents the decoder leaning on any one regularity. Neither substitutes for the other, which the sampling sweep confirms from the other side: raising diffusion's own stochasticity (eta 0 -> 1) moved the proxy not at all (0.572 -> 0.572), because within-distribution noise is not the out-of-distribution randomization that does the work; 200 denoising steps bought +0.016, a fidelity gain. Recipe for synthetic gesture data as of now: learn one generator, hand-build a deliberately unrealistic one, mix them | `runs/ar_gen_mix*`, `runs/quality_gmix.json` |
+| 66 | **#51's reopened ladder, climbed: the LM-scale ladder run *in-search* instead of as a second pass** — seven models on the byte-identical fused bundle at one config (M=8, delta, μ=0.8, α=0.4, beam 8, all three lags), fixed 3-of-8 val slice, every comparison paired (McNemar over discordant words, not the unpaired SE) | **scale pays in-search where it was flat as a rescorer, and the payment is authority: gpt2 → xl is −0.08 at streaming (p=0.66), +0.31 at lookahead-1, +0.64 at joint (p=3.1e-05).** The GPT-2 family rises monotonically (94.60 / 94.83 / 95.13 / 95.24) converting 41–54% of headroom against 25–29% as rescorers, and is *flat at streaming* — #51's endpoint result was a real slope, and the slope only exists where the LM can prune. **Above xl the ladder stops on distribution, not saturation:** Qwen3.5-9B, 6× xl's parameters and two generations newer, scores 94.39 — 0.85 *below* xl (p=7.1e-06), tied with 124M gpt2 (p=0.32), its own curve already flattening (2B→9B +0.23, n.s.). Not a weight artifact (both families sweep to the same μ=0.8 optimum; the mismatched one wants *more* LM). Authority amplifies mismatch symmetrically: Qwen-0.8B, worth +0.9 as a rescorer (#34), is worth **less than no LM at all** in-search (92.39 vs 92.53) — pruning is irreversible in a way reranking is not. The deficit is entirely mid/tail frequency (−1.06/−1.42 vs xl, head ±0.00): not grammar, but which uncommon word this corpus uses | `run_fused_local.py --lags --mus`, `compare_hyps.py`, `runs/ladder_*.log`, `runs/musweep_*.log` |
 
 Standing conclusions the log supports:
 
@@ -1146,7 +1258,17 @@ Standing conclusions the log supports:
   *into* the search, where it steers which hypotheses survive, the same
   gpt2→xl swap buys +0.43 (#51), and the invariance gap it cannot touch
   (#50–51) marks the boundary between context-soluble and context-free
-  errors. The scope has a far edge, now measured too: moved all the way
+  errors. The full ladder in that role (#66) says what the scale variable
+  actually is: **authority**. gpt2→xl is worth −0.08 when the LM may only
+  rescore the current word, +0.31 with one word of lookahead and +0.64 when
+  it may prune the whole sentence — flat, then steep, on one swap. So scale
+  is a lever only where the LM decides what survives, and the same lever
+  runs both ways: a *mismatched* reader that pays +0.9 as a rescorer costs
+  0.14 in-search, because pruning is irreversible where reranking is not.
+  What it is not is a route past gpt2-xl — 9B of modern curated pretraining
+  lands 0.85 under it, in the mid- and tail-frequency words, so #34's
+  distribution finding survives the change of role that overturned its
+  scale finding. The scope has a far edge, now measured too: moved all the way
   *into the decoder's weights* (#52), the LM degenerates to what the swipe
   corpus's text can teach — +0.7 of left context, zero right context, a
   memorized prompt prior — while taxing the acoustic stream it shares
@@ -1215,6 +1337,8 @@ scripts/
   eval_decoder.py         greedy vs trie-constrained beam search
   eval_deferred_commit.py hold n-best open across swipes; does right context pay?
   nbest_freq_buckets.py   bucket n-best misses by the target's training count
+  run_fused_local.py      one fused sentence-beam config, LM scoring in-search
+  compare_hyps.py         paired (McNemar) comparison of two runs' hypotheses
   diagnose_transfer.py    attribute the cross-corpus gap to subgroups
   finetune_transfer.py    does in-domain data close it? (user-disjoint split)
 ```
