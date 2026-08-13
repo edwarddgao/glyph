@@ -782,18 +782,22 @@ role that costs fifteen times as much to run.
 Part of it *is* a weight artifact, and only the top rung shows it. μ=0.8 was
 tuned on gpt2, so every arm got its own sweep on a nested 1/8 slice (joint):
 
-| LM | μ=0.2 | μ=0.4 | μ=0.8 | μ=1.2 | μ=1.6 |
-|---|---|---|---|---|---|
-| gpt2 | 94.12 | 94.56 | **94.56** | — | — |
-| gpt2-large | 94.32 | 94.76 | **94.96** | — | — |
-| gpt2-xl | 94.32 | 94.72 | **95.04** | 94.64 | 93.88 |
-| Qwen3.5-2B-Base | 94.28 | 94.60 | **94.64** | — | — |
-| Qwen3.5-9B-Base | 94.40 | **95.04** | 94.72 | — | — |
+| LM | μ=0.1 | μ=0.2 | μ=0.4 | μ=0.8 | μ=1.2 | μ=1.6 |
+|---|---|---|---|---|---|---|
+| gpt2 | — | 94.12 | 94.56 | **94.56** | — | — |
+| gpt2-medium | — | 94.24 | 94.60 | **94.76** | 94.40 | — |
+| gpt2-large | — | 94.32 | 94.76 | **94.96** | — | — |
+| gpt2-xl | — | 94.32 | 94.72 | **95.04** | 94.64 | 93.88 |
+| Qwen3.5-0.8B-Base | 93.63 | 94.16 | **94.28** | 92.71 | — | — |
+| Qwen3.5-2B-Base | — | 94.28 | 94.60 | **94.64** | — | — |
+| Qwen3.5-9B-Base | — | 94.40 | **95.04** | 94.72 | — | — |
 
-Every GPT-2 rung peaks at the weight the ladder used, and xl's fall-back at
-1.2 and 1.6 makes that an interior optimum rather than a truncated curve. So
-does Qwen-2B — the mismatched small model wants *more* LM, not less, so its
-deficit is not an over-weighting. Qwen-9B is the exception: it peaks at μ=0.4,
+All four GPT-2 rungs peak at the weight the ladder used, and the fall-backs at
+1.2 and 1.6 make that an interior optimum rather than a truncated curve. So
+does Qwen-2B — the mismatched middle model wants *more* LM, not less, so its
+deficit is not an over-weighting. The two ends of the Qwen family are where
+the weight stops transferring, and they break in opposite directions.
+Qwen-9B peaks at μ=0.4,
 worth +0.32 over μ=0.8 here (1.3 SE, p=0.27 — suggestive, not established),
 and at that weight it reaches 95.04, **exactly gpt2-xl's best on the same
 words**. The only modern rung that wants a lighter touch is the one strong
@@ -805,14 +809,10 @@ cannot separate it from gpt2-xl's 0.85-point lead at matched weight.
 **The weight, not the reader, is what does not transfer.** At the shared μ=0.8
 Qwen3.5-0.8B is worth less than no language model at all — 92.39 against the
 92.53 the same search reaches with the LM removed — which reads as a
-catastrophic model until it gets its own sweep:
-
-| μ | 0.1 | 0.2 | 0.4 | 0.8 |
-|---|---|---|---|---|
-| Qwen3.5-0.8B-Base, joint | 93.63 | 94.16 | **94.28** | 92.71 |
-
-Against that slice's 92.63 with the LM removed, its own weight is worth
-**+1.65**, and μ=0.8 — optimal for every GPT-2 rung — costs it 1.57 points and
+catastrophic model until the sweep above is read across its row rather than
+down the column. Against that slice's 92.63 with the LM removed, its own
+weight is worth **+1.65**, and μ=0.8 — optimal for all four GPT-2 rungs —
+costs it 1.57 points and
 nearly all of its value. This is the one sharp surface in a project whose
 tuned surfaces are otherwise famously flat (#15, #19, #23), and it is sharp
 exactly where a deployment would trip over it: μ transfers within a family and
