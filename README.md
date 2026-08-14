@@ -689,10 +689,13 @@ to 9B — 70× the parameters, two model generations — every result lands in a
 here; the 4B's dip below the 2B is noise, not an inversion). The best model
 on the entire ladder is 2019's gpt2-xl, and Qwen3.5-9B ties gpt2-medium.
 
-*(The scale half of this is a claim about the **role**, not the model: run
-the same ladder inside the search and the GPT-2 family stops being flat —
-see "The same ladder, climbed inside the search". The Qwen half survives
-both roles.)*
+*(Both halves of this are now in doubt. The scale half is a claim about the
+**role**: run the same ladder inside the search and the GPT-2 family stops
+being flat. The Qwen half is a claim about the **scoring**: the delta form's
+subtracted prior is estimated by a proxy that suits GPT-2 and not Qwen, and
+correcting it moves the modern rungs 1–2.7 points — enough to reverse the
+ordering in-search. This table has not been re-run with the fix. See "The
+same ladder, climbed inside the search".)*
 
 **Distribution match beats capability.** The Qwen column is the sharper
 finding: modern curated pretraining is mildly *mismatched* to lowercase,
@@ -720,16 +723,17 @@ measure here.
 
 ```bash
 python scripts/run_fused_local.py --bundle fused_bundle_val38.pkl \
-    --lm gpt2-xl --m 8 --mu 0.8 --delta --lags 0,1,joint \
-    --save-hyps runs/hyps_ladder_xl.npz
-python scripts/compare_hyps.py runs/hyps_ladder_g2.npz runs/hyps_ladder_xl.npz
+    --lm Qwen/Qwen3.5-9B-Base --m 8 --mu 0.8 --delta --uncond marginal \
+    --lags 0,1,joint --save-hyps runs/hyps_uncond38_qw9.npz
+python scripts/compare_hyps.py runs/hyps_uncond38_xl.npz \
+    runs/hyps_uncond38_qw9.npz
+python scripts/probe_lm_fit.py --lms gpt2-xl,Qwen/Qwen3.5-9B-Base
 ```
 
 The table above prices LM scale as a *second pass*. #51 measured the same
 gpt2 → gpt2-xl swap *inside* the fused search and got +0.43 against that
-role's ~+0.2, which reopened the ladder — but from two endpoints only, and
-with nothing above 1.5B, where the GPT-2 family ends and any further rung has
-to change family into exactly the mismatch this section documents.
+role's ~+0.2, which reopened the ladder — from two endpoints only, and with
+nothing above 1.5B, where the GPT-2 family ends.
 
 Every rung decodes the byte-identical bundle at one config — AR-MMI deep
 lists, M=8, delta form, μ=0.8, α=0.4, β=1.2, beam 8 — over a fixed 3-of-8
@@ -741,146 +745,117 @@ not the ±0.16 unpaired SE.
 | LM | params | vintage | streaming | lookahead-1 | joint | headroom |
 |---|---|---|---|---|---|---|
 | *(no LM)* | — | — | 92.53 | — | — | — |
-| gpt2 | 124M | 2019 | 93.92 | 94.43 | 94.60 | 41% |
-| gpt2-medium | 355M | 2019 | 93.63 | 94.39 | 94.83 | 45% |
-| gpt2-large | 774M | 2019 | 94.07 | 94.71 | 95.13 | 51% |
-| gpt2-xl | 1.5B | 2019 | 93.85 | 94.73 | **95.24** | **54%** |
-| Qwen3.5-0.8B-Base | 0.8B | 2026 | 90.22 | 91.94 | 92.39 | −3% |
-| Qwen3.5-2B-Base | 2B | 2026 | 92.89 | 93.86 | 94.16 | 32% |
-| Qwen3.5-4B-Base | 4B | 2026 | 91.52 | 92.98 | 93.53 | 20% |
-| Qwen3.5-9B-Base | 9B | 2026 | 92.76 | 94.04 | 94.39 | 37% |
+| gpt2 | 124M | 2019 | 93.87 | 94.56 | 94.67 | 42% |
+| gpt2-medium | 355M | 2019 | 93.96 | 94.81 | 95.12 | 51% |
+| gpt2-large | 774M | 2019 | 94.24 | 95.07 | 95.22 | 53% |
+| gpt2-xl | 1.5B | 2019 | 94.11 | 94.99 | 95.22 | 53% |
+| Qwen3.5-0.8B-Base | 0.8B | 2026 | 93.90 | 94.77 | 95.04 | 50% |
+| Qwen3.5-2B-Base | 2B | 2026 | 94.19 | 95.22 | 95.38 | 56% |
+| Qwen3.5-9B-Base | 9B | 2026 | 94.22 | 95.30 | **95.54** | **60%** |
 
-**Within the family the slope is real.** 94.60 → 94.83 → 95.13 → 95.24 rises
-at every rung, +0.64 end to end at p = 3.1e-05 paired. #51's endpoint reading
-survives the interior, and in-search conversion (41–54% of headroom) runs
-roughly double the 25–29% the same models convert as rescorers.
+**In-search conversion runs about double the second pass.** 42–60% of the
+same headroom the rescoring ladder converts at 25–29%, which is #51's finding
+at seven rungs instead of two.
 
-**The gain is authority, not ranking.** Split that swap by how much the LM is
-allowed to decide:
+**The gain tracks authority, not ranking.** Split gpt2 → gpt2-xl by how much
+the LM is allowed to decide:
 
 | commitment | gpt2 | gpt2-xl | delta | paired p |
 |---|---|---|---|---|
-| streaming (lag 0) | 93.92 | 93.85 | −0.08 | 0.66 |
-| lookahead-1 | 94.43 | 94.73 | +0.31 | 0.058 |
-| joint | 94.60 | 95.24 | **+0.64** | 3.1e-05 |
+| streaming (lag 0) | 93.87 | 94.11 | +0.24 | 0.11 |
+| lookahead-1 | 94.56 | 94.99 | +0.42 | 0.0038 |
+| joint | 94.67 | 95.22 | **+0.56** | 0.00012 |
 
-Given only the current word to score, twelve times the parameters is worth
-nothing, and the whole family is flat there (93.92 / 93.63 / 94.07 / 93.85, no
-trend). The value appears precisely as the LM gains the power to keep
-hypotheses alive across the sentence. #34 and #51 collapse into one statement:
-the flat ladder was never a fact about the model, it was a fact about what the
-model was allowed to decide.
+The same swap more than doubles in value as the LM gains the power to keep
+hypotheses alive across the sentence, and is not resolvable at all while it
+may only rescore the current word. The cross-family gap has the identical
+signature — Qwen-9B over gpt2-xl is +0.11 at streaming (p=0.54), +0.32 at
+lookahead-1 (p=0.035), +0.32 at joint (p=0.037). Whatever separates two
+readers here, it only becomes visible where the reader can prune.
 
-> **Superseded below (#67).** Everything in this subsection about the modern
-> family — the deficit, the family-specific μ optima, 0.8B below the no-LM
-> floor — is an artifact of how `delta` estimated the LM's own prior, and
-> dissolves once that estimate is fixed. The GPT-2 rungs and the
-> authority decomposition are unaffected. The measurements are left as
-> recorded; the reading of them was wrong.
+**Above gpt2-xl the ladder does keep climbing — but only after fixing how
+`delta` estimates its own prior.** The GPT-2 family saturates at 774M (large
+and xl tie at 95.22), while the modern family passes it: Qwen3.5-9B leads by
++0.32 (p=0.037), 2B by +0.16 (p=0.31, a tie), and even 0.8B — half gpt2-xl's
+size — draws level at 95.04. That is the opposite of what the first pass of
+this experiment measured, and the difference is one line of scoring.
 
-**Above gpt2-xl the ladder does not climb on capability.** Qwen3.5-9B-Base
-carries six times gpt2-xl's parameters and seven years of better-curated data,
-and at the shared weight lands 0.85 *below* it (p = 7.1e-06) — statistically
-tied with 124M gpt2 (−0.21, p = 0.32). Its own family curve is already
-flattening (0.8B → 2B +1.78 at 8.1 SE; 2B → 9B +0.23 at 1.2 SE, n.s.), so the
-modern family is converging toward an asymptote near, not past, where 2019's
-WebText models already sit. This is the Qwen column above, reproduced in a
-role that costs fifteen times as much to run — including its kink, which turns
-out to be the same story a second time. The 4B checkpoint sits *below* both
-its neighbours there, and at the shared weight it sits further below here
-(−0.64 against 2B at p=0.0016, −0.86 against 9B at p=2.1e-05) — a dip the
-rescoring ladder could only call noise. But 4B wants μ=0.4 as well (94.48
-against 94.00 at 0.8), and at each rung's own weight the dip shrinks to −0.16
-against 2B (p=0.71). So the kink is mostly the borrowed weight rather than the
-checkpoint, and three of the four Qwen rungs — every one except 2B — are
-mis-served by the weight the GPT-2 family shares.
+#### The prior term is family-specific, and it is worth 2.65 points
 
-Part of it *is* a weight artifact, and the split runs along the family line.
-μ=0.8 was tuned on gpt2, so every arm got its own sweep on a nested 1/8 slice
-(joint):
+`delta` is defined as `log P(w|ctx) − log P(w)` — contextual evidence with the
+LM's own prior removed (#10, #49) — and the implementation estimated `log P(w)`
+as `log P(w | start token)`. Against the corpus unigram that proxy correlates
+at **0.92 for gpt2 and 0.77 for Qwen3.5-2B**, because GPT-2 has a real BOS and
+Qwen has none, so it gets `<|endoftext|>` instead. The term is subtracted from
+every candidate, so a worse proxy quietly degrades every score the model
+produces. Estimating the prior over a set of neutral contexts instead
+(`--uncond marginal`) costs one extra cached forward per candidate word and
+changes each rung by:
 
-| LM | μ=0.1 | μ=0.2 | μ=0.4 | μ=0.8 | μ=1.2 | μ=1.6 |
-|---|---|---|---|---|---|---|
-| gpt2 | — | 94.12 | 94.56 | **94.56** | — | — |
-| gpt2-medium | — | 94.24 | 94.60 | **94.76** | 94.40 | — |
-| gpt2-large | — | 94.32 | 94.76 | **94.96** | — | — |
-| gpt2-xl | — | 94.32 | 94.72 | **95.04** | 94.64 | 93.88 |
-| Qwen3.5-0.8B-Base | 93.63 | 94.16 | **94.28** | 92.71 | — | — |
-| Qwen3.5-2B-Base | — | 94.28 | 94.60 | **94.64** | — | — |
-| Qwen3.5-4B-Base | — | 94.16 | **94.48** | 94.00 | — | — |
-| Qwen3.5-9B-Base | — | 94.40 | **95.04** | 94.72 | — | — |
+| LM | bos proxy | marginal | delta | paired p |
+|---|---|---|---|---|
+| gpt2 | 94.60 | 94.67 | +0.07 | 0.63 |
+| gpt2-medium | 94.83 | 95.12 | +0.29 | 0.012 |
+| gpt2-large | 95.13 | 95.22 | +0.09 | 0.44 |
+| gpt2-xl | 95.24 | 95.22 | −0.01 | 1.0 |
+| Qwen3.5-0.8B-Base | 92.39 | 95.04 | **+2.65** | 6.8e-33 |
+| Qwen3.5-2B-Base | 94.16 | 95.38 | **+1.22** | 5.5e-14 |
+| Qwen3.5-9B-Base | 94.39 | 95.54 | **+1.15** | 8.3e-13 |
 
-All four GPT-2 rungs peak at the weight the ladder used, and the fall-backs at
-1.2 and 1.6 make that an interior optimum rather than a truncated curve. So
-does Qwen-2B, alone in its family — the other three Qwen rungs all peak at
-μ=0.4, so the borrowed weight mis-serves three quarters of the modern family
-and costs each of them differently. Qwen-9B peaks at μ=0.4,
-worth +0.32 over μ=0.8 here (1.3 SE, p=0.27 — suggestive, not established),
-and at that weight it reaches 95.04 on this slice — **exactly gpt2-xl's best
-on the same words**. Rerun at μ=0.4 over the full 3/8 slice, the re-weighting
-survives and the tie does not:
+The GPT-2 rungs move by rounding error and every Qwen rung by 1–2.7 points.
+Three separate "findings" from the first pass are that one asymmetry wearing
+three hats: the modern-family deficit; a *sharp* μ surface where this project's
+tuned surfaces are otherwise flat, with Qwen peaking at 0.4 and GPT-2 at 0.8
+(fixed, every model wants 0.8 again); and Qwen-0.8B scoring below the no-LM
+floor. A systematic error in a shared term does not add noise — it manufactures
+structure, and the structure it manufactured here was plausible enough to
+survive a written-up, committed conclusion.
 
-| Qwen3.5-9B-Base, 7,539 words | streaming | lookahead-1 | joint |
-|---|---|---|---|
-| at the shared μ=0.8 | 92.76 | 94.04 | 94.39 |
-| at its own μ=0.4 | 93.77 | 94.57 | **94.92** |
-| gpt2-xl at its own μ=0.8 | 93.85 | 94.73 | **95.24** |
+The lesson generalizes past this stack: **any scoring form with a subtracted
+prior inherits a hidden dependence on how that prior is estimated, and the
+estimate can be good for one model family and bad for another.** #34's
+rescoring ladder uses the same convention over the same checkpoints, so its
+"distribution match beats capability" reading is likely measuring this too and
+wants re-running before it is relied on.
 
-Its own weight is worth +0.53 (p=0.0011, 3.3 SE) and closes most of the
-matched-weight gap, and gpt2-xl still finishes +0.32 ahead (p=0.045, 2.1 SE).
-So the ladder above gpt2-xl is closed for this corpus at best-config for both
-arms — 6× the parameters and 15× the decode time buys a smaller deficit, not a
-lead. The residual obeys the same law as everything else here: at best weight
-the two are indistinguishable when the LM may only rescore (+0.08, p=0.69) or
-look ahead one word (+0.16, p=0.33), and separate only where it may prune the
-sentence.
+#### Fit to the text and usefulness in the search are not the same thing
 
-**The weight, not the reader, is what does not transfer.** At the shared μ=0.8
-Qwen3.5-0.8B is worth less than no language model at all — 92.39 against the
-92.53 the same search reaches with the LM removed — which reads as a
-catastrophic model until the sweep above is read across its row rather than
-down the column. Rerun at its own μ=0.4 over the full 7,539 words it scores
-**94.20** — +1.82 over the shared weight (p=9.3e-22) and **+1.67 over the same
-search with no LM at all** (p=2.5e-17), which puts a 0.75B modern model within
-0.40 of gpt2 (p=0.032) rather than below the floor. The weight optimal for all
-four GPT-2 rungs costs it 1.82 points — every bit of its value and then some.
-This is the one sharp surface in a project whose tuned surfaces are otherwise
-famously flat (#15, #19, #23), and it is sharp exactly where a deployment
-would trip over it: μ transfers within a family and not across one, so
-swapping the LM without re-tuning silently converts a +1.67 component into a
-−0.14 one. What authority amplifies is not the model's
-quality but the *cost of mis-weighting* it — a reader that merely reorders a
-finished list can be over-trusted cheaply, while one that prunes the search
-destroys hypotheses that never come back.
+The obvious explanation for the first pass's ordering was that 2019 web text
+simply matches lowercase, unpunctuated Common Voice prompts better. Measured,
+that is not what separates these models. Per-word NLL over the reference
+sentences, excluding the start position the convention above distorts:
 
-Where the deficit lives says what it is. Bucketing by the target's unigram
-frequency, head words are at ceiling for every reader (99.3%) and the entire
-ladder is a fight over the rarer two thirds:
+| LM | nll/word | in-search rank |
+|---|---|---|
+| gpt2 | 6.17 | 4th |
+| gpt2-xl | **5.62** | 3rd |
+| Qwen3.5-2B-Base | 6.01 | 2nd |
+| Qwen3.5-9B-Base | 6.50 | **1st** |
 
-| truth-frequency tercile | n | gpt2 | gpt2-xl | Qwen-2B | Qwen-9B |
-|---|---|---|---|---|---|
-| head | 2476 | 99.27 | 99.39 | 99.39 | 99.27 |
-| mid | 2463 | 97.97 | **98.50** | 97.44 | 97.44 |
-| tail | 2466 | 91.69 | **92.98** | 90.75 | 91.57 |
+The ranking is inverted: the model that fits this text *worst* ranks *best* in
+the search. Which is what the delta form is for — it removes the prior on
+purpose, so absolute calibration to a deformatted corpus is beside the point
+and what survives is contextual contrast. It also explains why the prior term
+turned out to dominate: it is the one place where a model's absolute
+distribution leaks back into a score meant to be free of it.
 
-Qwen-9B gives up its 0.85 to gpt2-xl entirely in mid (−1.06) and tail (−1.42)
-with head at ±0.00. The modern model is not failing at grammar; it is failing
-at which *uncommon* word this corpus uses — WebText is closer to Common Voice
-prompts than curated 2026 pretraining is.
+Two surface-form notes fall out of the same probe. Casing and punctuating the
+references lifts Qwen-9B by 20% perplexity while leaving gpt2-xl flat, and
+restores the modern family's monotonicity (on raw text 9B fits worse than 2B;
+on cased text it fits better) — so the *inversion* is a formatting effect even
+though the ranking is not. And fp16 is exonerated as a cause anywhere: against
+fp32 the worst per-token disagreement is 0.011 nats.
 
-Two caveats and an ops note. The slice is 3/8 of validation, not the full 20k:
-the anchors read 94.60 and 95.24 against #51's full-val 94.45 and 94.88, so
-levels run a few tenths high and the slice's gpt2→xl gap is wider than full
-validation's +0.43 — read these deltas as slice deltas. All models run fp16
-including the bf16-native Qwen checkpoints, because bf16's 8-bit mantissa
-costs 0.15 nats of pure batch-order noise on MPS against fp16's 0.02 (fp32 is
-exactly batch-invariant, and 0.02 nats moves no decisions: the batched and
-per-state scorers agree word for word on both families). And #51's ops lesson
-half-inverts — the fused search is launch-bound only while the model is small.
-Scoring every live state in one forward makes it 2.4x faster and genuinely
-compute-bound by 9B, where one pass takes **9.2 hours on MPS against
-gpt2-xl's 35 minutes for identical work**; above ~2B, cloud parallelism is the
-right tool again.
+Caveats. The slice is 3/8 of validation, not the full 20k: gpt2 and gpt2-xl
+read 94.60 and 95.24 under the original scoring against #51's full-val 94.45
+and 94.88, so levels run a few tenths high and the deltas here are slice
+deltas. `MARGINAL_CTXS` is eight hand-written neutral prefixes — crude, and a
+corpus-sampled estimator would likely do better still, which if anything means
+the modern rungs are *under*-corrected. And an ops note that half-inverts
+#51's: the fused search is launch-bound only while the model is small; scoring
+every live state in one forward makes it 2.4x faster and genuinely
+compute-bound by 9B, where one pass takes 8 hours on MPS against gpt2-xl's 30
+minutes for identical work.
 
 ## Second-pass acoustic rescoring
 
@@ -1304,7 +1279,7 @@ commit messages.
 | 63 | can a *learned* generator beat the analytic one? — WordGesture-GAN (CHI'23) read for the recipe, then five architectures against it, all judged synthetic-only on real val: v1 free-running regression, v2 Graves-style MDN steps, v3 prototype + monotone time warp, v4 v3 with offsets in a low-frequency basis, and a trajectory diffusion model; plus the published method implemented to spec | **yes, eventually — diffusion ties min-jerk at 85.43 vs 85.65 beam, after three architectures that failed on geometry rather than texture.** The failure axis is accumulation: v1's mean-seeking steps compound into a path *shorter than the polyline through its own letters* (0.86x, so it cuts corners and strands the gesture before the last key — caught by eye before any metric flagged it), v2's sampled steps compound into a random walk (path 5-15x, off the keyboard) and score *below* v1 despite better texture. v3 removes integration entirely (curve = prototype + offsets, sampled at a monotone warp normalized to end at 1, so reaching the last letter is structurally guaranteed): +32 beam. Diffusion denoises all 64 points jointly — same immunity, no mode-averaging — and lands nearest real on every geometry statistic (path 1.10 vs 1.10, end-err 0.060 vs 0.067, C2ST 0.61 against a 0.51 real-vs-real floor, where min-jerk sits at 0.77). Published WGG to spec: proxy 0.347, below every arm here, though its critic was still winning at cutoff — undertrained, not refuted | `model/gesturegen.py`, `model/gesturediff.py`, `model/wgg.py`, `runs/ar_gen*`, `runs/gesturediff*` |
 | 64 | the controls that make #63 a claim rather than an anecdote: (a) a 3-minute quality oracle — geometry/texture/shape stats, a real-vs-synthetic classifier, within-word diversity, and a *proxy decoder* (96-dim, 3 epochs, 120k gestures, greedy on real val) — calibrated against six corpora with known full-scale numbers; (b) the reconstruction ceiling: encode real gestures, decode the posterior mean, train on that | **(a) the proxy tracks full-scale beam at Spearman 0.94 (0.77 vs greedy) for 1/30th the compute, and predicted diffusion's unseen 85.43 from 0.572 before it was run; (b) the warp family is capped by its parameterization, not its prior — reconstructions of *real* gestures score 0.531 proxy against the family's own sampled 0.521 and real data's 0.662, with dwell 0.159 vs real 0.229 even when copying a specific gesture.** So no better prior, GAN, or sampler could have rescued v3/v4, and diffusion — which has no such bottleneck — already scores past the ceiling. Diversity rules out posterior collapse everywhere (0.40-0.45 vs real 0.36). Third realism/utility inversion, this one costly: v4 fixed the zig-zag a human observer flagged in v3 (turn 0.11 vs 0.18, zigzag 0.14 vs 0.23, closer to real on both) and utility *fell* 0.521 -> 0.454 | `gen_quality.py --calibrate`, `gen_reconstruct_corpus.py`, `runs/gen_quality_calib.log` |
 | 65 | if realism and randomization are different goods, are they complementary? — 50/50 mixture of the diffusion corpus and the domain-randomized min-jerk corpus, 917k total, otherwise the identical synthetic-only protocol | **yes, and the mixture is the first synthetic corpus to clear 88: val beam 88.54 / greedy 79.9 (+2.9 over min-jerk's 85.65 and +3.1 over diffusion's 85.43), hws 75.5, truth-in-list 97.8 — 3.9 short of real data's 92.40 from gestures no human produced.** The parents are doing different jobs: diffusion supplies realistic geometry and timing (C2ST 0.61), min-jerk supplies variation so wide it leaves the keyboard (path 1.76x, turn 0.92 vs real 0.27) and prevents the decoder leaning on any one regularity. Neither substitutes for the other, which the sampling sweep confirms from the other side: raising diffusion's own stochasticity (eta 0 -> 1) moved the proxy not at all (0.572 -> 0.572), because within-distribution noise is not the out-of-distribution randomization that does the work; 200 denoising steps bought +0.016, a fidelity gain. Recipe for synthetic gesture data as of now: learn one generator, hand-build a deliberately unrealistic one, mix them | `runs/ar_gen_mix*`, `runs/quality_gmix.json` |
-| 66 | **#51's reopened ladder, climbed: the LM-scale ladder run *in-search* instead of as a second pass** — seven models on the byte-identical fused bundle at one config (M=8, delta, μ=0.8, α=0.4, beam 8, all three lags), fixed 3-of-8 val slice, every comparison paired (McNemar over discordant words, not the unpaired SE) | **scale pays in-search where it was flat as a rescorer, and the payment is authority: gpt2 → xl is −0.08 at streaming (p=0.66), +0.31 at lookahead-1, +0.64 at joint (p=3.1e-05).** The GPT-2 family rises monotonically (94.60 / 94.83 / 95.13 / 95.24) converting 41–54% of headroom against 25–29% as rescorers, and is *flat at streaming* — #51's endpoint result was a real slope, and the slope only exists where the LM can prune. **Above xl the ladder does not climb on capability:** Qwen3.5-9B, 6× xl's parameters and two generations newer, scores 94.39 at matched weight — 0.85 *below* xl (p=7.1e-06), tied with 124M gpt2 (p=0.32), its own curve already flattening (2B→9B +0.23, n.s.). The per-model μ sweep splits that finding rather than confirming it: every GPT-2 rung and Qwen-2B peak at the ladder's μ=0.8 (xl falls back at 1.2 and 1.6, so it is a true optimum), but the other three Qwen rungs all peak at 0.4 — including 4B, whose #34-replicating dip below its own neighbours (−0.64 vs 2B, p=0.0016) mostly dissolves at own-weight (−0.16, p=0.71). 9B peaks at 0.4, worth +0.53 (p=0.0011) on a powered rerun — and at best-config for both arms gpt2-xl still finishes +0.32 ahead (94.92 vs 95.24, p=0.045). Re-weighting closes most of the matched-weight gap and does not cross it: 6× the parameters and 15× the decode time buys a smaller deficit, not a lead, and the residual again lives only at joint (streaming +0.08 n.s., lookahead-1 +0.16 n.s.). What does not transfer is the *weight*: Qwen-0.8B is worth less than no LM at all at the shared μ=0.8 (92.39 vs 92.53) and **+1.67 over no-LM** at its own μ=0.4 (94.20, p=2.5e-17, within 0.40 of gpt2) — the GPT-2-optimal weight costs it 1.82 points, every bit of its value. The one sharp surface in a project of flat ones (#15, #23), sharp exactly where a deployment trips: μ transfers within an LM family and not across one, and mis-weighting a reader that *prunes* destroys hypotheses that never come back. The deficit is entirely mid/tail frequency (−1.06/−1.42 vs xl, head ±0.00): not grammar, but which uncommon word this corpus uses | `run_fused_local.py --lags --mus`, `compare_hyps.py`, `runs/ladder_*.log`, `runs/musweep_*.log` |
+| 66 | **#51's reopened ladder, climbed — and the first climb was wrong.** Seven LMs (gpt2 124M→1.5B, Qwen3.5 0.8B→9B) in-search on the byte-identical fused bundle, one config, fixed 3/8 val slice, every comparison paired (McNemar over discordant words) | **scale pays in-search where it was flat as a rescorer, and the payment is authority: gpt2→xl is +0.24 at streaming (p=0.11), +0.42 at lookahead-1, +0.56 at joint (p=1.2e-04)**, converting 42–60% of headroom against 25–29% for the same models as a second pass. **Above gpt2-xl the ladder keeps climbing — the GPT-2 family saturates at 774M (large = xl = 95.22) and Qwen3.5-9B passes it at 95.54 (+0.32, p=0.037), 2B ties at 95.38, 0.8B draws level at 95.04 on half xl's parameters.** That reverses this cell's own first pass, which had every Qwen rung 1–2.7 points low: `delta` = logP(w|ctx) − logP(w) estimated logP(w) as logP(w|start token), a proxy correlating 0.92 with the corpus unigram for gpt2 (real BOS) and 0.77 for Qwen (none, gets <|endoftext|>), subtracted from every candidate. Estimating the prior over neutral contexts instead moves gpt2-xl by −0.01 (p=1.0) and Qwen-0.8B/2B/9B by **+2.65/+1.22/+1.15** (p≤5.5e-14). Three first-pass 'findings' were that one asymmetry: the modern-family deficit, a *sharp* family-specific μ surface in a project of flat ones (fixed, all seven want μ=0.8), and 0.8B below the no-LM floor. Fit is not usefulness: per-word NLL ranks gpt2-xl best (5.62) and Qwen-9B worst (6.50), exactly inverting the in-search order — delta removes the prior by construction, so absolute calibration is beside the point and the prior term is the one place it leaks back in. **#34 uses the same convention on the same checkpoints and wants re-running** | `run_fused_local.py --uncond marginal`, `compare_hyps.py`, `probe_lm_fit.py`, `runs/{ladder,uncond38,musweep}_*.log` |
 
 Standing conclusions the log supports:
 
@@ -1319,17 +1294,18 @@ Standing conclusions the log supports:
   gpt2→xl swap buys +0.43 (#51), and the invariance gap it cannot touch
   (#50–51) marks the boundary between context-soluble and context-free
   errors. The full ladder in that role (#66) says what the scale variable
-  actually is: **authority**. gpt2→xl is worth −0.08 when the LM may only
-  rescore the current word, +0.31 with one word of lookahead and +0.64 when
-  it may prune the whole sentence — flat, then steep, on one swap. So scale
-  is a lever only where the LM decides what survives, and the same lever
-  runs both ways: a *mismatched* reader that pays +0.9 as a rescorer costs
-  0.14 in-search, because pruning is irreversible where reranking is not.
-  What it is not is a route past gpt2-xl — 9B of modern curated pretraining
-  lands 0.85 under it at the shared weight and 0.32 under it at
-  best-config-per-arm (#66), in the mid- and tail-frequency words, so #34's
-  distribution finding survives the change of role that overturned its
-  scale finding. The scope has a far edge, now measured too: moved all the way
+  actually is: **authority**. gpt2→xl is worth +0.24 (n.s.) when the LM may
+  only rescore the current word, +0.42 with one word of lookahead and +0.56
+  when it may prune the whole sentence — the same swap more than doubling as
+  the LM gains the power to decide, and only resolvable once it can revise.
+  It *is* a route past gpt2-xl, contrary to what this log said at first:
+  Qwen3.5-9B leads it by 0.32 (p=0.037) and the GPT-2 family saturates at
+  774M. The correction that produced that reversal is the more portable
+  finding — `delta`'s subtracted prior was estimated per model by a proxy
+  that suits GPT-2 and not Qwen, which cost the modern rungs 1–2.7 points
+  each and fabricated three plausible conclusions (#66). #34's ladder shares
+  the convention and is due the same re-run. The scope has a far edge, now
+  measured too: moved all the way
   *into the decoder's weights* (#52), the LM degenerates to what the swipe
   corpus's text can teach — +0.7 of left context, zero right context, a
   memorized prompt prior — while taxing the acoustic stream it shares
@@ -1400,6 +1376,7 @@ scripts/
   nbest_freq_buckets.py   bucket n-best misses by the target's training count
   run_fused_local.py      one fused sentence-beam config, LM scoring in-search
   compare_hyps.py         paired (McNemar) comparison of two runs' hypotheses
+  probe_lm_fit.py         does the best-ranking LM also model the eval text best?
   diagnose_transfer.py    attribute the cross-corpus gap to subgroups
   finetune_transfer.py    does in-domain data close it? (user-disjoint split)
 ```
