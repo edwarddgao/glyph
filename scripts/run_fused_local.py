@@ -37,6 +37,11 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 BETA = 1.2
 ALPHA = 0.4
 BEAM = 8
+# Neutral English prefixes, averaged over to estimate the LM's own marginal
+# P(w). Deliberately generic and corpus-independent: this stands in for the
+# model's prior, not for the corpus's, which alpha already supplies.
+MARGINAL_CTXS = ["", "i think", "and then", "she said", "it was",
+                 "we can", "they will", "he did"]
 
 
 def main() -> None:
@@ -63,6 +68,14 @@ def main() -> None:
                     help="external unigram weight in the acoustic score; "
                          "dilution-trained first passes want more of it")
     ap.add_argument("--delta", action="store_true")
+    ap.add_argument("--uncond", default="bos", choices=["bos", "marginal"],
+                    help="how delta estimates the LM's own prior. bos = "
+                         "logP(w | start token), the cheap proxy #49 used; "
+                         "marginal = averaged over MARGINAL_CTXS, which "
+                         "matters for models with no native BOS: on Qwen3.5 "
+                         "the bos proxy tracks the corpus unigram at r=0.77 "
+                         "against gpt2's 0.92, and delta subtracts it from "
+                         "every word")
     ap.add_argument("--lags", default="0,1,joint",
                     help="comma list of commitment lags to run "
                          "(0=streaming, 1=lookahead1, joint)")
@@ -274,8 +287,10 @@ def main() -> None:
             if cl:
                 cands = [w for w, _ in cl]
                 ctxs = [" ".join(words) for words, _ in states]
-                lm_fill(ctxs + ([""] if args.delta else []), cands)
-                unc = ([cache[("", w)] for w in cands] if args.delta
+                base = MARGINAL_CTXS if args.uncond == "marginal" else [""]
+                lm_fill(ctxs + (base if args.delta else []), cands)
+                unc = ([sum(cache[(c, w)] for c in base) / len(base)
+                        for w in cands] if args.delta
                        else [0.0] * len(cands))
                 expansions: dict[tuple, float] = {}
                 for (words, cum), ctx in zip(states, ctxs):

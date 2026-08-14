@@ -771,6 +771,13 @@ hypotheses alive across the sentence. #34 and #51 collapse into one statement:
 the flat ladder was never a fact about the model, it was a fact about what the
 model was allowed to decide.
 
+> **Superseded below (#67).** Everything in this subsection about the modern
+> family — the deficit, the family-specific μ optima, 0.8B below the no-LM
+> floor — is an artifact of how `delta` estimated the LM's own prior, and
+> dissolves once that estimate is fixed. The GPT-2 rungs and the
+> authority decomposition are unaffected. The measurements are left as
+> recorded; the reading of them was wrong.
+
 **Above gpt2-xl the ladder does not climb on capability.** Qwen3.5-9B-Base
 carries six times gpt2-xl's parameters and seven years of better-curated data,
 and at the shared weight lands 0.85 *below* it (p = 7.1e-06) — statistically
