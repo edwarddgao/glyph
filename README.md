@@ -862,6 +862,168 @@ every live state in one forward makes it 2.4x faster and genuinely
 compute-bound by 9B, where one pass takes 8 hours on MPS against gpt2-xl's 30
 minutes for identical work.
 
+## Training-free decoding: the LLM as the lexicon
+
+```bash
+python scripts/eval_llm_trace.py --limit 500 --context oracle   # rung 1
+python scripts/eval_llm_beam.py --limit 200 --context oracle \
+    --gate-letters 10 --topk-geom 60 --beam 64                  # rung 3
+```
+
+Everything above trains an encoder on gesture data. This section asks the
+inverted question: with the corpora used for **evaluation only**, how far do
+analytic geometry and a pretrained LM get? No CTC encoder, no trie, no
+lexicon, no rescorer — the LM's vocabulary is the candidate space and a
+closed-form alignment cost is the acoustic channel.
+
+| decoder | LM | context | top-1 | n-best | swipes/s |
+|---|---|---|---|---|---|
+| key trace → LM, few-shot generation | Qwen3.5-2B | none | 10.0% | — | 5.7 |
+| key trace → LM, few-shot generation | Qwen3.5-2B | oracle | 21.2% | — | 5.7 |
+| joint geometric-LM beam | Qwen3.5-2B | none (primed) | 54.7% | 66.0% | 0.18 |
+| joint geometric-LM beam | gpt2-xl | none (primed) | 60.7% | 69.3% | ~1.1 |
+| joint geometric-LM beam | Qwen3.5-0.8B | oracle | 80.7% | 86.0% | 0.21 |
+| joint geometric-LM beam | Qwen3.5-2B | oracle | 80.7% | 86.7% | 0.18 |
+| joint geometric-LM beam | Qwen3.5-9B | oracle | 85.3% | 90.0% | 0.10 |
+| joint geometric-LM beam | **gpt2-xl** | oracle | **88.7%** | **92.7%** | **1.09** |
+| joint beam, cross-corpus (HWS test) | Qwen3.5-2B | none (primed) | 36.7% | 50.7% | — |
+| geom + trie + wordfreq unigram | — | none | 72.7% | 90.0% | ~4.0 |
+| geom + trie + LLM rescore | gpt2-xl | oracle | **90.7%** | 95.3% | ~2 |
+| geom + trie, cross-corpus (HWS) | — | none | 56.0% | 77.3% | ~4.0 |
+
+All futo rows on the same 150 validation swipes, disjoint from the 50 used to
+set the search widths (n=500 for the generation rows); fp16 on MPS.
+Trained-stack anchors on this split: greedy 78.4, trie beam 91.9, full fused
+stack ~95, and 80.4 cross-corpus on HWS.
+
+**2019's gpt2-xl beats the entire modern family — and this time it is not an
+artifact.** #66's first climb produced the same ordering and died under
+scrutiny because the delta form's subtracted prior was mis-estimated for
+Qwen. This decoder has no delta form: candidates are ranked by raw
+`logP(word | ctx)`, so absolute fit to the eval text is exactly what matters —
+and `probe_lm_fit.py` already measured gpt2-xl as the best per-word fit on
+these lowercase Common Voice prompts (5.62 NLL/word vs Qwen-9B's 6.50).
+The in-search ordering here tracks that NLL table (xl 88.7 > 9B 85.3 > 2B =
+0.8B 80.7; xl > 2B at McNemar p=0.008, xl vs 9B +5 discordant-9 n.s. at
+p=0.27), where #66's delta-form fused search inverts it. Same checkpoints,
+same corpus: whether scale or distribution match wins depends on whether the
+scoring form cancels the prior. As a bonus the winner is also 6-10x faster:
+full attention runs at 1.1 swipes/s on MPS where Qwen3.5's linear-attention
+torch fallback costs ~11ms *per hypothesis row* regardless of sequence
+length, which also caps what context caching can save (13%).
+
+**The trace string is not enough.** `trace.key_trace` reduces a swipe to the
+keys under the finger (`crack` → `cftresaszxcvghjk`); the collapsed label is a
+strict subsequence of it for 78% of validation swipes, and the misses are
+corner cuts (`that` traced with no `h`). Few-shot prompting a base model to
+invert that string — examples synthesized from straight-line templates, so no
+gesture data enters the prompt — lands at 10–21%: the model emits frequent
+words agreeing with the first letter and the context and ignores the
+interior. 9B ties 2B; reading character-level geometry out of a prompt is not
+a base-LM competence, which is why the geometry has to move inside the search.
+
+**The geometric channel alone is nearly sufficient.** `geomllm.GestureDP`
+scores a letter string by explaining *every* resampled gesture point: letters
+land on points (Gaussian around key centers, in key half-extent units),
+points between landings pay transit around the connecting segment, partial
+hypotheses are charged a lower bound for path not yet consumed. One O(N) row
+per hypothesis, one recurrence per appended letter, so it rides inside a beam.
+Ranked against 2k common words with untuned physics constants it puts the true
+word first on 88% of real swipes and in the top-8 on 100% (n=100) — most of
+what the trained encoder provides, from the layout alone. What it cannot do is
+*enumerate*: candidates have to come from somewhere, and that is the LM's job.
+
+**The joint beam** (`eval_llm_beam.py`): hypotheses are letter strings scored
+`lm_weight * logP_LM + logP_geom`; proposals per step are the LM's top tokens
+plus per-letter quotas for the geometrically plausible next letters, each
+gated letter's bare single-char token always included (they are LM-rare, so no
+LM ranking surfaces them, yet they are the only guaranteed path to words the
+tokenizer has buried). A parallel LM-only pass recalls contextually likely
+words the joint pass loses to path-hugging noise; the pooled words are ranked
+by canonical LM score plus geometry.
+
+Four things broke on the way, each worth keeping:
+
+1. **Qwen3.5 has no usable cold start** — conditioned on `<|endoftext|>`
+   alone, its next-word distribution is flat multilingual noise (every
+   letter-start token ≈ −15 nats, `Ġthe` included); gpt2's BOS distribution
+   is sharply English. Same asymmetry that inverted #66's first climb. A
+   one-sentence neutral English prime restores a usable prior and is worth
+   ~15 points on the no-context row.
+2. **Left padding corrupts Qwen3.5 logits** — the linear-attention torch
+   fallback ignores the attention mask, so pad tokens leak into the state.
+   Everything here right-pads and gathers at true positions, which is safe
+   for any causal model.
+3. **A word reached letter-by-letter carries the wrong LM score.** Its
+   char-token path logprob sinks roughly twice as fast as its canonical
+   tokenization (` sled` = −6.6 canonical, ≈ −35 as `s·l·e·d`), starving
+   long rare words a step before they finish. Hypotheses are therefore
+   re-tokenized canonically at every step — the forward pass then yields the
+   exact prefix logprob for free and no separate rescoring pass exists.
+4. **Partial-cost optimism breeds degenerates.** Score a prefix by
+   `min(row)` and strings like `cffffffff` camp on 10% of the gesture at
+   near-zero cost while adding letters free (`crack` lost its beam slot to
+   them by 0.5). The unexplained-tail bound (each remaining point at least
+   hovers near its nearest key) removes the entire failure class.
+
+**Recall is the bottleneck, and it is exactly the lexicon's job.** At every
+setting tried, when the true word survived to completion it won the pool —
+the last climb (68 → 84 on the dev slice) came entirely from proposal width
+(gate letters 4 → 10, beam 32 → 64), and the residual misses are proper
+nouns and rare words whose char paths branch away mid-word
+(`androscoggin`, `hanseatic`, `sled` → `dle`). A trie collapses that
+branching for free; without one the search pays seconds per swipe against
+milliseconds for the trie beam. Engineering recovered some of it — context
+KV cache with batch expansion (works on gpt2 and, via manual state cloning,
+on Qwen3.5's hybrid cache), one batched softmax/gather per step instead of
+per-row reductions (which cost 20x the forward itself in launch overhead),
+row dedup across the lockstepped passes, vectorized DP extension — for 1.6x
+on Qwen and the architecture note above doing the rest. The honest headline
+stands: a pretrained LM plus closed-form geometry recovers beam-level
+accuracy with zero gesture training, and the entire remaining price —
+compute and the proper-noun tail — is the candidate enumeration the lexicon
+was buying.
+
+**The two substitutions, decomposed** (`eval_geom_trie.py`). The design
+above replaced both trained stages at once — encoder with geometry, lexicon
+with the LM's vocabulary — so its deficit could sit in either. Putting the
+trie back while keeping the training-free first stage separates them:
+geometry + wf320k trie + unigram prior + gpt2-xl rescore reaches **90.7/95.3**
+(oracle, same 150 swipes), a statistical tie with the LLM-as-lexicon beam
+at 20x the speed. The trained beam scores **93.3** on the same 150 (its
+full-val 91.9 understates it here), so the true residual is ~4 net words:
+on inspection, one dictionary hole (`bodychecked` is in FUTO's train vocab
+but not wordfreq), a couple of coin-flips (`hes`/`hers`), and 3-4 sloppy
+gestures where the trained encoder's learned noise model genuinely outranks
+fixed-Gaussian, timing-blind alignment — the same acoustic residual the HWS
+transfer prices at scale. Verdict on the two substitutions:
+swapping the *encoder* for analytic geometry is nearly free; swapping the
+*lexicon* for the LM's vocabulary bought nothing measurable — only ~0.7% of
+validation refs fall outside wf320k and the lexicon-free beam decoded zero
+of them — while costing the enumeration recall that produced the entire
+deficit. Making the LM the enumerator does not remove LM bias; it relocates
+it from scoring (where bias misranks a candidate you have) to proposal
+(where bias makes the word unreachable). Two footnotes worth keeping: the
+unigram prior is worth 68 → 98 on the dev slice (geometry alone against
+320k confusables is not enough, the prior is doing SHARK²'s job), and a
+*cold* raw-LM rescore is no better than the unigram (70.7 vs 72.7) — #10's
+"raw logP hurts, only the gated delta form works" reappearing in a
+training-free costume.
+
+**Transfer strips the disguise off that claim.** On How We Swipe (different
+apparatus, users, year; no sentence context exists there) the joint beam
+falls to 36.7/50.7 while the trained stack holds 80.4. The decomposition is
+clean: the analytic channel alone still ranks the true word first on 70% of
+HWS swipes (top-8 96%) against 2k distractors — apparatus noise costs it ~18
+points from futo's 88 — but with no context the LM prior cannot break ties
+among path-compatible common words (`plane` → `one`, `target` → `great`),
+and enumeration-without-context collapses. The trie-equipped version proves
+the point by construction: geometry + trie + unigram holds 56.0/77.3 on the
+same corpus with no context at all — +19 over the LM-as-lexicon — and the
+remaining gap to the trained stack's 80.4 prices the one thing the trained
+encoder still owns: robustness to apparatus noise (the analytic channel's
+88 → 70 standalone drop), which is acoustic value, not implicit-LM value.
+
 ## Second-pass acoustic rescoring
 
 ```bash
@@ -1285,6 +1447,10 @@ commit messages.
 | 64 | the controls that make #63 a claim rather than an anecdote: (a) a 3-minute quality oracle — geometry/texture/shape stats, a real-vs-synthetic classifier, within-word diversity, and a *proxy decoder* (96-dim, 3 epochs, 120k gestures, greedy on real val) — calibrated against six corpora with known full-scale numbers; (b) the reconstruction ceiling: encode real gestures, decode the posterior mean, train on that | **(a) the proxy tracks full-scale beam at Spearman 0.94 (0.77 vs greedy) for 1/30th the compute, and predicted diffusion's unseen 85.43 from 0.572 before it was run; (b) the warp family is capped by its parameterization, not its prior — reconstructions of *real* gestures score 0.531 proxy against the family's own sampled 0.521 and real data's 0.662, with dwell 0.159 vs real 0.229 even when copying a specific gesture.** So no better prior, GAN, or sampler could have rescued v3/v4, and diffusion — which has no such bottleneck — already scores past the ceiling. Diversity rules out posterior collapse everywhere (0.40-0.45 vs real 0.36). Third realism/utility inversion, this one costly: v4 fixed the zig-zag a human observer flagged in v3 (turn 0.11 vs 0.18, zigzag 0.14 vs 0.23, closer to real on both) and utility *fell* 0.521 -> 0.454 | `gen_quality.py --calibrate`, `gen_reconstruct_corpus.py`, `runs/gen_quality_calib.log` |
 | 65 | if realism and randomization are different goods, are they complementary? — 50/50 mixture of the diffusion corpus and the domain-randomized min-jerk corpus, 917k total, otherwise the identical synthetic-only protocol | **yes, and the mixture is the first synthetic corpus to clear 88: val beam 88.54 / greedy 79.9 (+2.9 over min-jerk's 85.65 and +3.1 over diffusion's 85.43), hws 75.5, truth-in-list 97.8 — 3.9 short of real data's 92.40 from gestures no human produced.** The parents are doing different jobs: diffusion supplies realistic geometry and timing (C2ST 0.61), min-jerk supplies variation so wide it leaves the keyboard (path 1.76x, turn 0.92 vs real 0.27) and prevents the decoder leaning on any one regularity. Neither substitutes for the other, which the sampling sweep confirms from the other side: raising diffusion's own stochasticity (eta 0 -> 1) moved the proxy not at all (0.572 -> 0.572), because within-distribution noise is not the out-of-distribution randomization that does the work; 200 denoising steps bought +0.016, a fidelity gain. Recipe for synthetic gesture data as of now: learn one generator, hand-build a deliberately unrealistic one, mix them | `runs/ar_gen_mix*`, `runs/quality_gmix.json` |
 | 66 | **#51's reopened ladder, climbed — and the first climb was wrong.** Seven LMs (gpt2 124M→1.5B, Qwen3.5 0.8B→9B) in-search on the byte-identical fused bundle, one config, fixed 3/8 val slice, every comparison paired (McNemar over discordant words) | **scale pays in-search where it was flat as a rescorer, and the payment is authority: gpt2→xl is +0.24 at streaming (p=0.11), +0.42 at lookahead-1, +0.56 at joint (p=1.2e-04)**, converting 42–60% of headroom against 25–29% for the same models as a second pass. **Above gpt2-xl the ladder keeps climbing — the GPT-2 family saturates at 774M (large = xl = 95.22) and Qwen3.5-9B passes it at 95.54 (+0.32, p=0.037), 2B ties at 95.38, 0.8B draws level at 95.04 on half xl's parameters.** That reverses this cell's own first pass, which had every Qwen rung 1–2.7 points low: `delta` = logP(w|ctx) − logP(w) estimated logP(w) as logP(w|start token), a proxy correlating 0.92 with the corpus unigram for gpt2 (real BOS) and 0.77 for Qwen (none, gets <|endoftext|>), subtracted from every candidate. Estimating the prior over neutral contexts instead moves gpt2-xl by −0.01 (p=1.0) and Qwen-0.8B/2B/4B/9B by **+2.65/+1.22/+1.74/+1.15** (p≤5.5e-14). Four first-pass 'findings' were that one asymmetry: the modern-family deficit, a *sharp* family-specific μ surface in a project of flat ones (fixed, all eight want μ=0.8), 0.8B below the no-LM floor, and 4B's dip below its own smaller sibling (−0.64 → −0.12, n.s.). Fit is not usefulness: per-word NLL ranks gpt2-xl best (5.62) and Qwen-9B worst (6.50), exactly inverting the in-search order — delta removes the prior by construction, so absolute calibration is beside the point and the prior term is the one place it leaks back in. **#34 uses the same convention on the same checkpoints and wants re-running** | `run_fused_local.py --uncond marginal`, `compare_hyps.py`, `probe_lm_fit.py`, `runs/{ladder,uncond38,musweep}_*.log` |
+| 67 | training-free floor: swipe → nearest-key trace string → base LM inverts it few-shot, prompt built entirely from straight-line templates (corpora eval-only). Plus the two channel diagnostics that shaped rung 3 | **10.0% / 21.2% top-1 (none / oracle context, n=500, Qwen3.5-2B; 9B ties 2B)** — the LM emits frequent words agreeing with first letter and context and ignores the interior; character-level trace reading is not a prompting competence. The diagnostics cut the other way: the collapsed label is a strict subsequence of the trace for 78% of real swipes (misses are corner cuts — `that` with no `h`), and the analytic alignment cost alone ranks the true word first among 2k common words on **88%** of swipes, top-8 100% (n=100, untuned constants) — geometry is nearly sufficient, enumeration is the hard part | `trace.py`, `eval_llm_trace.py` |
+| 68 | training-free joint decoder: LM token beam with the analytic alignment cost in-search — the LM's vocabulary as the lexicon. Letter-string hypotheses, canonical re-tokenization every step, per-letter proposal quotas with forced single-char tokens, LM-only companion pass, unexplained-tail bound on partials. One knob (lm_weight, flat 0.5–1.5), widths set on 50 val swipes, measured on the disjoint 150 | **oracle context 81.3 top-1 / 87.3 n-best; cold start 54.7 / 66.0 (2B, ~9 s/swipe MPS)** — beam-level accuracy (trained trie beam: 91.9) with zero gesture training and no lexicon. En route: Qwen3.5's `<|endoftext|>` distribution is flat noise (#66's asymmetry; a neutral prime is worth ~15 pts cold), left padding corrupts its linear-attention fallback, char-token paths under-score words ~2x vs canonical tokenization, and `min(row)` partials breed `cffff…` degenerates until the tail bound kills the class. Recall is the whole bottleneck: whenever the true word finished it won the pool, every gain came from proposal width, and the residual misses are proper nouns (`androscoggin`, `hanseatic`) — compute and the proper-noun tail are exactly the candidate enumeration a lexicon buys | `geomllm.py`, `eval_llm_beam.py` |
+| 69 | #68's three open levers, pulled: (a) speed — context KV cache with batch expansion (manual state cloning for Qwen3.5's hybrid DynamicLayer + LinearAttentionLayer cache, parity-probed), batched softmax/gather replacing per-row reductions, row dedup across lockstepped passes, vectorized DP extension; (b) the LM ladder in-search (gpt2-xl, Qwen3.5 0.8B/2B/9B, oracle context, disjoint-150); (c) cross-corpus on HWS test | **(b) 2019's gpt2-xl tops the ladder at 88.7/92.7 over 9B's 85.3/90.0 (xl > 2B p=0.008; xl vs 9B +5 n.s. p=0.27; 0.8B = 2B = 80.7) — #66's refuted first-pass ordering, resurrected legitimately: this decoder ranks by raw logP(word|ctx), no delta form, so absolute fit decides, and the ordering tracks probe_lm_fit's NLL table exactly (xl 5.62 best, 9B 6.50 worst) where the delta-form fused search inverts it. Whether scale or distribution match wins is a property of the scoring form, not the models.** (a) 1.6x on Qwen and a hard ceiling found: the linear-attention torch fallback costs ~11ms/row regardless of sequence length (batch-bound, cache saves 13%); gpt2-xl's full attention runs 1.09 swipes/s — the most accurate rung is also 6-10x the fastest. (c) HWS cold: 36.7/50.7 vs trained stack's 80.4. Decomposition: geometry alone still 70% top-1 / 96% top-8 there (apparatus noise −18 from futo's 88), so the collapse is enumeration-without-context — misses are common words (`plane`→`one`), not exotica. LM-as-lexicon does not survive cold on a foreign corpus; a lexicon would inherit the 70% for free | `eval_llm_beam.py --offset`, `geomllm.ContextCache`, `runs from scratchpad dumps` |
+| 70 | the cell that arbitrates #68's deficit — training-free geometry + wf320k trie + unigram prior + optional gpt2-xl rescore, i.e. keep the bias-free first stage, put the lexicon back. Motivating hypothesis under test: training-free removes stage-1 implicit-LM bias, lexicon-free removes stage-2 OOV | **stage-1 substitution is nearly free, stage-2 substitution caused the whole deficit: 90.0/94.0 oracle on the same 150 (statistical tie with the LLM-as-lexicon beam, 5v3 discordants p=0.73, at 20x the speed; trained trie beam 91.9), 72.7/90.0 with no LM and no context at 4 swipes/s, 56.0/77.3 cross-corpus cold (+19 over LM-as-lexicon; trained stack 80.4).** The lexicon-free premise dissolves on contact: only ~0.7% of refs sit outside wf320k (#6 already said the tail was small) and the lexicon-free beam decoded zero of them — LM-as-enumerator relocates LM bias from scoring, where it misranks, to proposal, where it makes words unreachable. Unigram prior worth 68 → 98 on the dev slice (geometry cannot fight 320k confusables alone; the prior is SHARK²'s job); cold raw-LM rescore ≤ unigram (70.7 vs 72.7) — #10's gating result in a training-free costume. Remaining misses are the true proper-noun tail (`androscoggin`, `swanland`, `batam`) plus HWS apparatus noise (88 → 70 standalone), the residual that is genuinely acoustic | `eval_geom_trie.py` |
 
 Standing conclusions the log supports:
 
