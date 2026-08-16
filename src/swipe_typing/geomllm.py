@@ -55,7 +55,15 @@ class GeomConfig:
     n_points: int = 96          #: gesture resampling (arclength)
     sigma_key: float = 1.0      #: landing tolerance, key half-extents
     sigma_transit: float = 2.0  #: transit tolerance, key half-extents
-    w_transit: float = 0.3      #: per-point weight of transit vs landing
+    w_transit: float = 0.3     #: per-point weight of transit vs landing
+    #: exponent on per-point dwell time: transit through a region where the
+    #: finger lingered costs more, so hypotheses that put a letter at the
+    #: dwell are favored. 0 disables; the alignment is otherwise blind to
+    #: timing (arclength resampling discards it).
+    time_weight: float = 0.0
+    #: (dx, dy) touch bias in canonical units, added to key centers — users
+    #: systematically touch below centers (README calibration section).
+    offset: tuple[float, float] = (0.0, 0.0)
 
 
 class GestureDP:
@@ -77,12 +85,29 @@ class GestureDP:
         self.scale = kb.radii.mean(axis=0).astype(np.float64)
         xy = resample(points, t, n=self.cfg.n_points, mode="arclength")
         self.g = xy.astype(np.float64) / self.scale          # (N, 2)
-        self.keys = kb.centers.astype(np.float64) / self.scale  # (K, 2)
+        centers = kb.centers.astype(np.float64) + np.asarray(self.cfg.offset)
+        self.keys = centers / self.scale                     # (K, 2)
         self.n = len(self.g)
+        # Per-point dwell weight: time spent near each resampled point,
+        # normalized to mean 1. Multiplies transit costs only — landing is
+        # location evidence, dwell is where-the-finger-paused evidence.
+        if self.cfg.time_weight > 0:
+            pts = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+            step = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+            u = np.concatenate([[0.0], np.cumsum(step)])
+            tt = np.asarray(t, dtype=np.float64)
+            tt = np.maximum.accumulate(tt)
+            grid = np.linspace(0.0, max(u[-1], 1e-9), self.n)
+            ti = np.interp(grid, u, tt)
+            dt = np.gradient(ti)
+            w = dt / max(dt.mean(), 1e-9)
+            self._tw = np.clip(w, 0.25, 4.0) ** self.cfg.time_weight
+        else:
+            self._tw = np.ones(self.n)
         # Cached per-letter landing and transit-to-key cost vectors.
         d2 = ((self.g[:, None, :] - self.keys[None, :, :]) ** 2).sum(-1)
         self._land = d2 / self.cfg.sigma_key ** 2                 # (N, K)
-        self._hover = (self.cfg.w_transit * d2
+        self._hover = (self.cfg.w_transit * d2 * self._tw[:, None]
                        / self.cfg.sigma_transit ** 2)             # (N, K)
         self._seg_cache: dict[int, np.ndarray] = {}
         # Lower bound on the cost of explaining points after j: each must at
@@ -110,7 +135,8 @@ class GestureDP:
         tt = np.clip((self.g - p) @ v.T / safe, 0.0, 1.0)   # (N, K)
         proj = p + tt[:, :, None] * v[None, :, :]           # (N, K, 2)
         d2 = ((self.g[:, None, :] - proj) ** 2).sum(-1)     # (N, K)
-        out = (self.cfg.w_transit * d2 / self.cfg.sigma_transit ** 2).T
+        out = (self.cfg.w_transit * d2 * self._tw[:, None]
+               / self.cfg.sigma_transit ** 2).T
         out[vv < 1e-12] = self._hover[:, a]
         self._seg_cache[a] = out
         return out

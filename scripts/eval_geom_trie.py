@@ -95,12 +95,39 @@ def main() -> None:
     ap.add_argument("--rescore-top", type=int, default=200)
     ap.add_argument("--candidates", type=int, default=500,
                     help="geometric candidates kept before the prior")
+    ap.add_argument("--time-weight", type=float, default=0.0,
+                    help="dwell-time exponent on transit costs")
+    ap.add_argument("--calibrate", type=int, default=0,
+                    help="estimate the global touch-offset bias, label-free, "
+                         "from the endpoints of this many swipes (taken from "
+                         "the start of the loaded stream)")
+    ap.add_argument("--rescore-unigram", type=float, default=None,
+                    help="unigram weight inside the LM-rescored final score "
+                         "(default: same as --unigram; 0 restores pure "
+                         "lm - geometry ranking)")
+    ap.add_argument("--mu", type=float, default=0.0,
+                    help="delta-form prior subtraction: rank by "
+                         "lm_weight*(logP(w|ctx) - mu*logP(w|prime)) + "
+                         "unigram*logp + geometry (#10/#66)")
     ap.add_argument("--dump", default="")
     args = ap.parse_args()
 
     kb = KeyboardLayout.qwerty()
     corpus = SwipeCorpus.load(args.data, ALPHABET,
                               limit=args.offset + args.limit)
+
+    offset_xy = (0.0, 0.0)
+    if args.calibrate > 0:
+        # Touchdown/liftoff residual vs the nearest key center; no labels.
+        res = []
+        for i in range(min(args.calibrate, len(corpus))):
+            pts = corpus.points(i)
+            for p in (pts[0], pts[-1]):
+                d = (p - kb.centers) / kb.radii
+                res.append(p - kb.centers[np.argmin((d * d).sum(-1))])
+        offset_xy = tuple(np.median(np.asarray(res), axis=0))
+        print(f"calibrated touch offset: ({offset_xy[0]:+.4f}, "
+              f"{offset_xy[1]:+.4f}) canonical units")
     counts = english_counts(args.lexicon, alphabet=ALPHABET)
     total = sum(counts.values())
     logp = {w: math.log(c / total) for w, c in counts.items()}
@@ -154,23 +181,31 @@ def main() -> None:
     t0 = time.time()
     idx = list(range(args.offset, len(corpus)))
     floor = min(logp.values()) - 2.0
+    gcfg = GeomConfig(time_weight=args.time_weight, offset=offset_xy)
+    prime_ids = ([bos] + tok.encode(args.prime)) if lm is not None else None
     for k, i in enumerate(idx):
-        dp = GestureDP(corpus.points(i), corpus.times(i), kb, GeomConfig())
+        dp = GestureDP(corpus.points(i), corpus.times(i), kb, gcfg)
         cands = decode(dp, root, kb, args.beam)[:args.candidates]
         scored = [(w, -g + args.unigram * logp.get(w, floor))
                   for w, g in cands]
         scored.sort(key=lambda t: -t[1])
         if lm is not None:
             short = scored[:args.rescore_top]
+            words = [w for w, _ in short]
             ctx = left_context(i) if args.context == "oracle" else ""
             ctx = " ".join(filter(None, [args.prime
                                          if args.context == "none" else "",
                                          ctx]))
             ctx_ids = [bos] + (tok.encode(ctx) if ctx else [])
-            lps = lm_scores(ctx_ids, [w for w, _ in short])
+            lps = lm_scores(ctx_ids, words)
+            if args.mu > 0:
+                lps = lps - args.mu * lm_scores(prime_ids, words)
             geom = dict(cands)
-            scored = [(w, args.lm_weight * lps[j] - geom[w])
-                      for j, (w, _) in enumerate(short)]
+            ru = (args.unigram if args.rescore_unigram is None
+                  else args.rescore_unigram)
+            scored = [(w, args.lm_weight * lps[j] - geom[w]
+                       + ru * logp.get(w, floor))
+                      for j, w in enumerate(words)]
             scored.sort(key=lambda t: -t[1])
         ref = corpus.words[i]
         pred = scored[0][0] if scored else ""

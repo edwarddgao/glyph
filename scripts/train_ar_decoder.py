@@ -75,6 +75,12 @@ def main() -> None:
     ap.add_argument("--d-model", type=int, default=128)
     ap.add_argument("--dilations", default="1,2,4,8,1,2,4,8")
     ap.add_argument("--dec-layers", type=int, default=2)
+    ap.add_argument("--dec-ffn", type=int, default=None,
+                    help="decoder FFN width; default 2*d_model (256 at the "
+                         "baseline width, i.e. unchanged)")
+    ap.add_argument("--dec-heads", type=int, default=None,
+                    help="decoder attention heads; default keeps head dim "
+                         "32 (4 at the baseline width, i.e. unchanged)")
     ap.add_argument("--dropout", type=float, default=0.1)
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--device", default="auto")
@@ -162,6 +168,8 @@ def main() -> None:
         dropout=args.dropout,
         shape_only=args.shape_only,
         dec_layers=args.dec_layers,
+        dec_ffn=args.dec_ffn if args.dec_ffn else 2 * args.d_model,
+        dec_heads=args.dec_heads if args.dec_heads else max(4, args.d_model // 32),
     )
     model = ARSwipeDecoder(cfg).to(device)
     print(f"params: {model.num_parameters():,}")

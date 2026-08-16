@@ -54,10 +54,20 @@ from eval_decoder import build_lexicon, load_model, pick_device  # noqa: E402
 from eval_reranker import order_by_sentence  # noqa: E402
 
 
+# Neutral English prefixes for the `marginal` prior estimate — the same set
+# run_fused_local.py uses. #66: estimating log P(w) as log P(w | start token)
+# suits GPT-2 (real BOS, correlation 0.92 with the corpus unigram) and not
+# Qwen (no BOS, gets <|endoftext|>, correlation 0.77); averaging over neutral
+# contexts moved gpt2-xl by -0.01 and the Qwen rungs by +1.15 to +2.65 in the
+# fused search.
+MARGINAL_CTXS = ["", "i think", "and then", "she said", "it was",
+                 "we can", "they will", "he did"]
+
+
 class NeuralLM:
     """Sums token log-probabilities of a candidate word given a text prefix."""
 
-    def __init__(self, name: str, device: torch.device):
+    def __init__(self, name: str, device: torch.device, uncond_mode: str = "bos"):
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         self.tok = AutoTokenizer.from_pretrained(name)
@@ -70,6 +80,7 @@ class NeuralLM:
         # Qwen-style tokenizers have no BOS; eos is their document separator.
         self.bos = (self.tok.bos_token_id if self.tok.bos_token_id is not None
                     else self.tok.eos_token_id)
+        self.uncond_mode = uncond_mode
         self._uncond: dict[str, float] = {}
 
     def _ctx_ids(self, context: str) -> torch.Tensor:
@@ -112,8 +123,10 @@ class NeuralLM:
     def unconditional(self, words: list[str]) -> list[float]:
         todo = [w for w in words if w not in self._uncond]
         if todo:
-            for w, s in zip(todo, self.score("", todo)):
-                self._uncond[w] = s
+            ctxs = MARGINAL_CTXS if self.uncond_mode == "marginal" else [""]
+            per_ctx = [self.score(c, todo) for c in ctxs]
+            for i, w in enumerate(todo):
+                self._uncond[w] = sum(s[i] for s in per_ctx) / len(ctxs)
         return [self._uncond[w] for w in words]
 
 
@@ -132,6 +145,11 @@ def main() -> None:
     ap.add_argument("--device", default="auto")
     ap.add_argument("--nbest-cache", default=None,
                     help="pickle path; reuse the first pass across LM runs")
+    ap.add_argument("--uncond", default="bos", choices=["bos", "marginal"],
+                    help="prior estimate for the delta form: bos = "
+                         "logP(w | start token) (#34's original convention), "
+                         "marginal = averaged over neutral contexts (#66's "
+                         "correction)")
     args = ap.parse_args()
 
     device = pick_device(args.device)
@@ -179,11 +197,11 @@ def main() -> None:
 
     base = sum(bool(b) and b[0][0] == refs[i] for i, b in enumerate(nbest)) / n
     ceiling = sum(refs[i] in [w for w, _ in b] for i, b in enumerate(nbest)) / n
-    print(f"== {args.split}  n={n:,}  LM={args.lm} ==")
+    print(f"== {args.split}  n={n:,}  LM={args.lm}  uncond={args.uncond} ==")
     print(f"  beam top-1 {base:.4f}   top-{args.top_k} ceiling {ceiling:.4f}"
           f"   headroom {ceiling - base:.4f}\n")
 
-    lm = NeuralLM(args.lm, device)
+    lm = NeuralLM(args.lm, device, uncond_mode=args.uncond)
 
     # Oracle context: the true cased sentence prefix.
     # Decoded context: what the reranker itself emitted, necessarily lowercase.

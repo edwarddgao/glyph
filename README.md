@@ -887,9 +887,10 @@ closed-form alignment cost is the acoustic channel.
 | joint geometric-LM beam | Qwen3.5-9B | oracle | 85.3% | 90.0% | 0.10 |
 | joint geometric-LM beam | **gpt2-xl** | oracle | **88.7%** | **92.7%** | **1.09** |
 | joint beam, cross-corpus (HWS test) | Qwen3.5-2B | none (primed) | 36.7% | 50.7% | — |
-| geom + trie + wordfreq unigram | — | none | 72.7% | 90.0% | ~4.0 |
-| geom + trie + LLM rescore | gpt2-xl | oracle | **90.7%** | 95.3% | ~2 |
-| geom + trie, cross-corpus (HWS) | — | none | 56.0% | 77.3% | ~4.0 |
+| geom + trie + unigram, dwell-weighted | — | none | 78.0% | 91.3% | ~4.0 |
+| geom + trie + LLM rescore, dwell-weighted | gpt2-xl | oracle | **89.3%** | 94.7% | ~2 |
+| geom + trie, cross-corpus (HWS), dwell-weighted | — | none | 61.3% | 81.3% | ~4.0 |
+| geom + trie + unigram, **full 20k val** | — | none | **79.2%** | 91.7% | ~4.0 |
 
 All futo rows on the same 150 validation swipes, disjoint from the 50 used to
 set the search widths (n=500 for the generation rows); fp16 on MPS.
@@ -988,15 +989,33 @@ was buying.
 above replaced both trained stages at once — encoder with geometry, lexicon
 with the LM's vocabulary — so its deficit could sit in either. Putting the
 trie back while keeping the training-free first stage separates them:
-geometry + wf320k trie + unigram prior + gpt2-xl rescore reaches **90.7/95.3**
-(oracle, same 150 swipes), a statistical tie with the LLM-as-lexicon beam
-at 20x the speed. The trained beam scores **93.3** on the same 150 (its
-full-val 91.9 understates it here), so the true residual is ~4 net words:
-on inspection, one dictionary hole (`bodychecked` is in FUTO's train vocab
-but not wordfreq), a couple of coin-flips (`hes`/`hers`), and 3-4 sloppy
-gestures where the trained encoder's learned noise model genuinely outranks
-fixed-Gaussian, timing-blind alignment — the same acoustic residual the HWS
-transfer prices at scale. Verdict on the two substitutions:
+geometry + wf320k trie + unigram prior + gpt2-xl rescore reaches ~89-91
+(oracle, same 150 swipes; 89.3/94.7 at the final frozen config, and every
+knob variant lands within 2-4 words of it — the surface is flat), a
+statistical tie with the LLM-as-lexicon beam at 20x the speed. The trained
+beam scores **93.3** on the same 150 (its full-val 91.9 understates it
+here), so the true residual is ~4-6 net words: on inspection, one dictionary
+hole (`bodychecked` is in FUTO's train vocab but not wordfreq), a couple of
+coin-flips (`hes`/`hers`), and 3-4 sloppy gestures where the trained
+encoder's learned noise model genuinely outranks the analytic alignment —
+the same acoustic residual the HWS transfer prices at scale.
+
+**Dwell weighting buys back a third of that residual.** The alignment was
+timing-blind — arclength resampling discards the fact that fingers slow
+down on real letters. Weighting transit costs by local dwell time
+(``GeomConfig.time_weight``, tuned on a separate 200-swipe slice, exponent
+flat over 1.0-1.5) is worth **+5.3 on the LM-free row (72.7 → 78.0) and
++5.3 cross-corpus (56.0 → 61.3, tuned on futo only)** — timing is real
+acoustic signal, free for the taking, and it transfers. Two nulls from the
+same round: the global touch-offset calibration measures only ~7% of a key
+(the canonical space already absorbed the bias — `calibrate_layout.py` is
+why), and the delta-form rescore ties raw logP once geometry and the
+unigram are both in the score (three channels make the prior subtraction
+redundant; #10's gating result is about raw logP *alone*). On the full 20k
+validation set the LM-free training-free stack reads **79.2/91.7** against
+the trained beam's 91.86/97.05 — level with the trained encoder's greedy
+78.4 without having seen a single gesture, with the beam's remaining lead
+sitting in candidate ranking on the sloppiest swipes and 1.5% wordfreq OOV. Verdict on the two substitutions:
 swapping the *encoder* for analytic geometry is nearly free; swapping the
 *lexicon* for the LM's vocabulary bought nothing measurable — only ~0.7% of
 validation refs fall outside wf320k and the lexicon-free beam decoded zero
@@ -1451,6 +1470,7 @@ commit messages.
 | 68 | training-free joint decoder: LM token beam with the analytic alignment cost in-search — the LM's vocabulary as the lexicon. Letter-string hypotheses, canonical re-tokenization every step, per-letter proposal quotas with forced single-char tokens, LM-only companion pass, unexplained-tail bound on partials. One knob (lm_weight, flat 0.5–1.5), widths set on 50 val swipes, measured on the disjoint 150 | **oracle context 81.3 top-1 / 87.3 n-best; cold start 54.7 / 66.0 (2B, ~9 s/swipe MPS)** — beam-level accuracy (trained trie beam: 91.9) with zero gesture training and no lexicon. En route: Qwen3.5's `<|endoftext|>` distribution is flat noise (#66's asymmetry; a neutral prime is worth ~15 pts cold), left padding corrupts its linear-attention fallback, char-token paths under-score words ~2x vs canonical tokenization, and `min(row)` partials breed `cffff…` degenerates until the tail bound kills the class. Recall is the whole bottleneck: whenever the true word finished it won the pool, every gain came from proposal width, and the residual misses are proper nouns (`androscoggin`, `hanseatic`) — compute and the proper-noun tail are exactly the candidate enumeration a lexicon buys | `geomllm.py`, `eval_llm_beam.py` |
 | 69 | #68's three open levers, pulled: (a) speed — context KV cache with batch expansion (manual state cloning for Qwen3.5's hybrid DynamicLayer + LinearAttentionLayer cache, parity-probed), batched softmax/gather replacing per-row reductions, row dedup across lockstepped passes, vectorized DP extension; (b) the LM ladder in-search (gpt2-xl, Qwen3.5 0.8B/2B/9B, oracle context, disjoint-150); (c) cross-corpus on HWS test | **(b) 2019's gpt2-xl tops the ladder at 88.7/92.7 over 9B's 85.3/90.0 (xl > 2B p=0.008; xl vs 9B +5 n.s. p=0.27; 0.8B = 2B = 80.7) — #66's refuted first-pass ordering, resurrected legitimately: this decoder ranks by raw logP(word|ctx), no delta form, so absolute fit decides, and the ordering tracks probe_lm_fit's NLL table exactly (xl 5.62 best, 9B 6.50 worst) where the delta-form fused search inverts it. Whether scale or distribution match wins is a property of the scoring form, not the models.** (a) 1.6x on Qwen and a hard ceiling found: the linear-attention torch fallback costs ~11ms/row regardless of sequence length (batch-bound, cache saves 13%); gpt2-xl's full attention runs 1.09 swipes/s — the most accurate rung is also 6-10x the fastest. (c) HWS cold: 36.7/50.7 vs trained stack's 80.4. Decomposition: geometry alone still 70% top-1 / 96% top-8 there (apparatus noise −18 from futo's 88), so the collapse is enumeration-without-context — misses are common words (`plane`→`one`), not exotica. LM-as-lexicon does not survive cold on a foreign corpus; a lexicon would inherit the 70% for free | `eval_llm_beam.py --offset`, `geomllm.ContextCache`, `runs from scratchpad dumps` |
 | 70 | the cell that arbitrates #68's deficit — training-free geometry + wf320k trie + unigram prior + optional gpt2-xl rescore, i.e. keep the bias-free first stage, put the lexicon back. Motivating hypothesis under test: training-free removes stage-1 implicit-LM bias, lexicon-free removes stage-2 OOV | **stage-1 substitution is nearly free, stage-2 substitution caused the whole deficit: 90.0/94.0 oracle on the same 150 (statistical tie with the LLM-as-lexicon beam, 5v3 discordants p=0.73, at 20x the speed; trained trie beam 91.9), 72.7/90.0 with no LM and no context at 4 swipes/s, 56.0/77.3 cross-corpus cold (+19 over LM-as-lexicon; trained stack 80.4).** The lexicon-free premise dissolves on contact: only ~0.7% of refs sit outside wf320k (#6 already said the tail was small) and the lexicon-free beam decoded zero of them — LM-as-enumerator relocates LM bias from scoring, where it misranks, to proposal, where it makes words unreachable. Unigram prior worth 68 → 98 on the dev slice (geometry cannot fight 320k confusables alone; the prior is SHARK²'s job); cold raw-LM rescore ≤ unigram (70.7 vs 72.7) — #10's gating result in a training-free costume. Remaining misses are the true proper-noun tail (`androscoggin`, `swanland`, `batam`) plus HWS apparatus noise (88 → 70 standalone), the residual that is genuinely acoustic | `eval_geom_trie.py` |
+| 71 | the residual attacked training-free: dwell weighting (transit costs scaled by local finger speed — arclength resampling had discarded timing), label-free touch-offset calibration, and the three-channel ranking formula, all tuned on a fresh 200-swipe slice, then frozen reads on the untouched 150 + HWS + full 20k val | **timing is the one that pays: +5.3 LM-free (72.7 → 78.0) and +5.3 cross-corpus (56.0 → 61.3, tuned on futo only — it transfers); full 20k val 79.2/91.7 with no LM, no context, no training, level with the trained encoder's greedy 78.4.** Calibration is a null — the measured bias is ~7% of a key because the canonical space already absorbed it (#1's alignment work paying out again). Delta-form rescore ties raw logP once geometry + unigram are both in the score; the knob surface is flat (every oracle-rescore variant within 2-4 words, final frozen 89.3/94.7 vs the trained beam's 93.3 on the same 150). Residual after all of it: candidate ranking on the sloppiest swipes (the trained noise model's last genuine edge), 1.5% wordfreq OOV, and coin-flips | `eval_geom_trie.py --time-weight --calibrate --rescore-unigram` |
 
 Standing conclusions the log supports:
 
