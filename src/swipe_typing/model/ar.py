@@ -24,7 +24,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .encoder import EncoderConfig, ResidualBlock
+from .encoder import EncoderConfig, build_trunk, run_trunk
 from .lexicon import Lexicon
 
 PAD = -100  # cross_entropy's default ignore_index
@@ -63,12 +63,9 @@ class ARSwipeDecoder(nn.Module):
         self.register_buffer("input_mean", torch.zeros(c.n_input))
         self.register_buffer("input_std", torch.ones(c.n_input))
         self.input_proj = nn.Conv1d(c.n_input, c.d_model, 1)
-        self.blocks = nn.ModuleList(
-            ResidualBlock(c.d_model, c.kernel_size, d, c.dropout)
-            for d in c.dilations
-        )
+        self.blocks, self.attn, self.attn_pos = build_trunk(c)
         self.mem_norm = nn.GroupNorm(1, c.d_model)
-        self.mem_pos = nn.Parameter(torch.zeros(1, 64, c.d_model))
+        self.mem_pos = nn.Parameter(torch.zeros(1, c.n_frames, c.d_model))
 
         self.tok_emb = nn.Embedding(c.vocab, c.d_model)
         self.tok_pos = nn.Parameter(torch.zeros(1, c.max_word_len + 1, c.d_model))
@@ -88,8 +85,7 @@ class ARSwipeDecoder(nn.Module):
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         x = (x - self.input_mean) / self.input_std
         h = self.input_proj(x.transpose(1, 2))
-        for block in self.blocks:
-            h = block(h)
+        h = run_trunk(self.cfg, self.blocks, self.attn, self.attn_pos, h)
         return F.gelu(self.mem_norm(h)).transpose(1, 2) + self.mem_pos
 
     def decode_step(self, memory: torch.Tensor,

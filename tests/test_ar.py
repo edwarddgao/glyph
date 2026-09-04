@@ -118,3 +118,68 @@ def test_ar_beam_respects_lexicon_and_exposes_components():
             assert np.isclose(uni_lp, lex.logp(word))
         # every lexicon word is reachable with a wide-enough beam
         assert len({w for w, *_ in cands}) == len(cands)  # deduped
+
+
+# --- encoder trunk variants -------------------------------------------------
+
+def _cfg(**kw):
+    base = dict(shape_only=True, d_model=32, dilations=(1, 2),
+                dec_layers=1, dec_heads=2, dec_ffn=64)
+    base.update(kw)
+    return ARConfig(**base)
+
+
+def test_default_trunk_state_dict_has_no_attention_keys():
+    """Checkpoints trained before the trunk variants must still load."""
+    keys = ARSwipeDecoder(_cfg()).state_dict().keys()
+    assert not any(k.startswith("attn") for k in keys)
+    assert any(k.startswith("blocks.0.conv1") for k in keys)
+
+
+def test_hybrid_and_conformer_trunks_train_and_beam():
+    lex = Lexicon.from_words(["cat", "cats", "dog", "at", "a"])
+    trie = FlatTrie(lex, ALPHABET)
+    x = _batch(3)
+    targets = torch.tensor([2, 0, 19, 3, 14, 6, 0], dtype=torch.long)
+    lengths = torch.tensor([3, 3, 1])
+    for cfg in (_cfg(trunk="hybrid", n_attn=1, attn_heads=2),
+                _cfg(trunk="conformer", n_attn=2, attn_heads=2,
+                     conv_kernel=5)):
+        torch.manual_seed(0)
+        model = ARSwipeDecoder(cfg)
+        assert model.attn_pos.shape == (1, 32, 64)
+        loss = ar_loss(model, x, targets, lengths)
+        loss.backward()
+        assert torch.isfinite(loss)
+        model.eval()
+        assert model.encode(x).shape == (3, 64, 32)
+        out = ar_beam(model, x, trie, ALPHABET, beam_width=8)
+        assert all(cands for cands in out)
+
+
+def test_n_frames_sizes_memory_positions():
+    model = ARSwipeDecoder(_cfg(n_frames=96)).eval()
+    assert model.mem_pos.shape == (1, 96, 32)
+    pts, t = _gesture()
+    x = torch.from_numpy(features.shape_features(pts, t, aspect=2.38, n=96))
+    assert model.encode(x[None]).shape == (1, 96, 32)
+    assert len(greedy_decode(model, x[None], ALPHABET)) == 1
+
+
+def test_dual_stream_dataset_layout():
+    from swipe_typing.layout import KeyboardLayout
+    from swipe_typing.model import SwipeCorpus, SwipeDataset
+    from conftest import make_swipe
+
+    kb = KeyboardLayout.qwerty()
+    corpus = SwipeCorpus.from_swipes([make_swipe("cat"), make_swipe("dog")],
+                                     ALPHABET)
+    single = SwipeDataset(corpus, kb, augment_cfg=None)
+    dual = SwipeDataset(corpus, kb, augment_cfg=None, resample_mode="both")
+    xs, _ = single[0]
+    xd, _ = dual[0]
+    assert xs.shape == (64, 32)
+    assert xd.shape == (64, 64)
+    # time stream first, identical to the single-stream features
+    assert torch.equal(xd[:, :32], xs)
+    assert ARConfig(dual_stream=True).n_input == 64

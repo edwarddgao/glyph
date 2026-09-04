@@ -174,6 +174,9 @@ class SwipeDataset(Dataset):
         if shape_only and permute_prob > 0.0:
             raise ValueError("permute_prob relabels the affinity block, "
                              "which shape_only removes")
+        if shape_only and resample_mode == "both":
+            raise ValueError("dual-stream input is defined on the affinity "
+                             "block, which shape_only removes")
         self.char_to_idx = {ch: i for i, ch in enumerate(layout.letters)}
 
     def __len__(self) -> int:
@@ -220,14 +223,22 @@ class SwipeDataset(Dataset):
                                         mode=self.resample_mode)
             return torch.from_numpy(x), torch.from_numpy(target)
 
-        resampled = features.resample(pts, t, n=self.n_points,
-                                      mode=self.resample_mode)
-        aff = features.key_affinity(resampled, centers, radii)
         # Measure motion in keys/second so a 5-row layout and a 3-row one put
         # the same gesture on the same scale.
         scale = features.key_scale(radii) if self.key_units else None
-        kin = features.kinematics(pts, t, aspect, n=self.n_points,
-                                  mode=self.resample_mode, scale=scale)
+        # "both" concatenates the time-uniform and arclength-uniform streams
+        # per frame (dual_stream encoders); the time stream comes first so
+        # the leading channels match the single-stream layout.
+        modes = (["time", "arclength"] if self.resample_mode == "both"
+                 else [self.resample_mode])
+        affs, kins = [], []
+        for mode in modes:
+            resampled = features.resample(pts, t, n=self.n_points, mode=mode)
+            affs.append(features.key_affinity(resampled, centers, radii))
+            kins.append(features.kinematics(pts, t, aspect, n=self.n_points,
+                                            mode=mode, scale=scale))
+        aff = np.concatenate(affs, axis=1)
+        kin = np.concatenate(kins, axis=1)
 
         if self.permute_prob > 0.0:
             if rng is None:
@@ -237,11 +248,17 @@ class SwipeDataset(Dataset):
                 # now sits on the key that belonged to letter perm[i]. The
                 # trajectory visits the same keys, so the label letter that
                 # was j becomes argsort(perm)[j].
-                perm = rng.permutation(aff.shape[1])
-                aff = aff[:, perm]
+                n_keys = affs[0].shape[1]
+                perm = rng.permutation(n_keys)
+                aff = np.concatenate([a[:, perm] for a in affs], axis=1)
                 target = np.argsort(perm)[target]
 
-        x = np.concatenate([aff, kin], axis=1)
+        if len(modes) == 1:
+            x = np.concatenate([aff, kin], axis=1)
+        else:
+            k = affs[0].shape[1]
+            x = np.concatenate([aff[:, :k], kin[:, :6], aff[:, k:], kin[:, 6:]],
+                               axis=1)
         return torch.from_numpy(x), torch.from_numpy(target)
 
 

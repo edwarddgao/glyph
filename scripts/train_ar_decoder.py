@@ -74,6 +74,21 @@ def main() -> None:
     ap.add_argument("--warmup", type=int, default=500)
     ap.add_argument("--d-model", type=int, default=128)
     ap.add_argument("--dilations", default="1,2,4,8,1,2,4,8")
+    ap.add_argument("--kernel-size", type=int, default=5)
+    ap.add_argument("--n-points", type=int, default=64,
+                    help="frames per gesture after resampling; the trunk "
+                         "and the AR memory positions are sized to it")
+    ap.add_argument("--trunk", default="tcn",
+                    choices=["tcn", "hybrid", "conformer"],
+                    help="hybrid = dilated convs then --n-attn self-attention "
+                         "layers; conformer = --n-attn conformer blocks "
+                         "instead of the convs")
+    ap.add_argument("--n-attn", type=int, default=0)
+    ap.add_argument("--attn-heads", type=int, default=4)
+    ap.add_argument("--attn-ffn", type=int, default=0,
+                    help="attention FFN width; 0 = 2*d_model")
+    ap.add_argument("--conv-kernel", type=int, default=7,
+                    help="conformer depthwise-conv kernel")
     ap.add_argument("--dec-layers", type=int, default=2)
     ap.add_argument("--dec-ffn", type=int, default=None,
                     help="decoder FFN width; default 2*d_model (256 at the "
@@ -85,7 +100,9 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--device", default="auto")
     ap.add_argument("--resample-mode", default="time",
-                    choices=["time", "arclength"])
+                    choices=["time", "arclength", "both"],
+                    help="'both' feeds the time- and arclength-uniform "
+                         "streams side by side (dual_stream encoder)")
     ap.add_argument("--train-limit", type=int, default=None)
     ap.add_argument("--eval-limit", type=int, default=20000)
     ap.add_argument("--eval-batches", type=int, default=40)
@@ -146,6 +163,7 @@ def main() -> None:
         train_sets.append(SwipeDataset(
             corpus, resolve_layout(layout_name),
             augment_cfg=None if args.no_augment else DEFAULT_AUG,
+            n_points=args.n_points,
             resample_mode=args.resample_mode,
             shape_only=args.shape_only,
             anchor_jitter=args.anchor_jitter,
@@ -167,6 +185,7 @@ def main() -> None:
             continue
         corpus = SwipeCorpus.load(path, kb.letters, limit=args.eval_limit)
         ds = SwipeDataset(corpus, kb, augment_cfg=None,
+                          n_points=args.n_points,
                           resample_mode=args.resample_mode,
                           shape_only=args.shape_only)
         evals[name] = make_loader(ds, batch_size=args.batch_size, shuffle=False,
@@ -177,8 +196,16 @@ def main() -> None:
         n_keys=len(kb.letters),
         d_model=args.d_model,
         dilations=tuple(int(d) for d in args.dilations.split(",")),
+        kernel_size=args.kernel_size,
         dropout=args.dropout,
         shape_only=args.shape_only,
+        n_frames=args.n_points,
+        trunk=args.trunk,
+        n_attn=args.n_attn,
+        attn_heads=args.attn_heads,
+        attn_ffn=args.attn_ffn,
+        conv_kernel=args.conv_kernel,
+        dual_stream=args.resample_mode == "both",
         dec_layers=args.dec_layers,
         dec_ffn=args.dec_ffn if args.dec_ffn else 2 * args.d_model,
         dec_heads=args.dec_heads if args.dec_heads else max(4, args.d_model // 32),

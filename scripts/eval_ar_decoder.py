@@ -78,6 +78,10 @@ def main() -> None:
     ap.add_argument("--top-k", type=int, default=8)
     ap.add_argument("--device", default="auto")
     ap.add_argument("--lexicon", default="train+wf320k")
+    ap.add_argument("--save-preds", default=None,
+                    help="npz prefix; writes <prefix>_<split>.npz with refs, "
+                         "greedy and beam top-1 words in compare_hyps.py's "
+                         "format (use --lag beam / --lag greedy)")
     args = ap.parse_args()
 
     device = pick_device(args.device)
@@ -98,6 +102,7 @@ def main() -> None:
             continue
         corpus = SwipeCorpus.load(path, alphabet, limit=args.limit)
         ds = SwipeDataset(corpus, kb, augment_cfg=None, resample_mode=mode,
+                          n_points=model.cfg.n_frames,
                           shape_only=model.cfg.shape_only)
         loader = make_loader(ds, batch_size=args.batch_size, shuffle=False,
                              num_workers=2)
@@ -157,6 +162,14 @@ def main() -> None:
         )
         print(f"  oracle over n-best:  {cells}")
 
+        if args.save_preds:
+            tag = split.replace("/", "_")
+            np.savez(f"{args.save_preds}_{tag}.npz",
+                     refs=np.array(refs, dtype=object),
+                     greedy=np.array(greedy_preds, dtype=object),
+                     beam=np.array(top1_words, dtype=object),
+                     ranks=np.array(ranks, dtype=np.int64),
+                     alpha=a, beta=b)
         wrong = [(p, r) for p, r in zip(top1_words, refs) if p != r]
         oov = sum(1 for _, r in wrong if r not in lexicon)
         print(f"  remaining errors: {len(wrong):,}  "

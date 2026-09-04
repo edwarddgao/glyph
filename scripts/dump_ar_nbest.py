@@ -58,6 +58,7 @@ def main() -> None:
 
     corpus = SwipeCorpus.load(root / args.split, alphabet, limit=args.limit)
     ds = SwipeDataset(corpus, kb, augment_cfg=None, resample_mode=mode,
+                      n_points=model.cfg.n_frames,
                       shape_only=model.cfg.shape_only)
     loader = make_loader(ds, batch_size=512, shuffle=False, num_workers=4)
     print(f"{args.split}: {len(corpus):,} swipes")
