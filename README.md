@@ -49,8 +49,12 @@ until the configuration was frozen.
 | n-best@8 ceiling (CTC stack) | 97.50% | — |
 | fused decoder, streaming (freeze 4) | 93.85% | — |
 | fused decoder, lookahead-1 (freeze 4) | 94.72% | — |
-| **fused decoder, joint (freeze 4)** | **95.20%** | — |
+| fused decoder, joint (freeze 4) | 95.20% | — |
 | deep-list ceiling@24 (freeze 4) | 98.22% | — |
+| fused decoder, streaming (freeze 5) | 94.24% | — |
+| fused decoder, lookahead-1 (freeze 5) | 94.95% | — |
+| **fused decoder, joint (freeze 5)** | **95.29%** | — |
+| deep-list ceiling@24 (freeze 5) | 98.09% | — |
 
 Freeze four replaces the CTC encoder and the three-pass second stage with the
 architecture built in #45–49: an autoregressive letter decoder (MMI
@@ -59,26 +63,41 @@ sentence-level search — 24 candidates per swipe, delta-form gpt2-xl scoring
 completions in-search (#49/#51), commitment expressed as a pruning lag. No
 rescorer, no separate deferred pass, one score formula.
 
+Freeze five (#84) keeps that recipe and composes the two post-freeze levers
+that cleared validation: the encoder trains on label-cleaned FUTO (#82, the
+1.6% of gestures that do not trace their label removed) with the same MMI
+epoch on top, and the prior algebra subtracts the encoder's internal LM
+while leaning harder on the corpus unigram (#78, α=0.6, λ=0.25). Both were
+nulls in-domain on validation and stayed nulls on test; their payoff is the
+cross-corpus row below. The whole configuration is `scripts/freeze5.py` —
+one file, stages from training to the final read, outputs under
+`runs/freeze5/` — and nothing else.
+
 The two deferred-commitment rows condition the LM only on the stack's own
 decoded words — unlike the 94.27 row, there is no oracle anywhere in them.
 Lookahead-1 bounds display latency to one word (the previous word may silently
 correct when the next swipe lands, 1.9% of the time); joint may revise any
 word in the sentence (2.5%).
 
-Cross-corpus, no fine-tuning: **80.4%** top-1 on How We Swipe (85k swipes,
-different apparatus, users and year).
+Cross-corpus, no fine-tuning: **82.8%** joint / 82.7% lookahead-1 top-1 on
+How We Swipe (all 85,421 swipes, different apparatus, users and year; freeze
+four read 80.4%). Freeze five is the first to read this split once, under
+the same posted-prediction protocol as the test split.
 
 Everything runs on a laptop: a 1.32M-parameter encoder trained in ~65 minutes
 on an M-series GPU plus a ~7-minute MMI fine-tune over its own beam's n-best
 lists (#26), and a 436k rescorer.
 
-The test split has now been read four times, once per frozen configuration:
+The test split has now been read five times, once per frozen configuration:
 the original stack (93.92, #19), the MMI fine-tune (94.27, #28), deferred
-commitment (94.62, #35), and the fused AR decoder (95.20, #53). Every time,
-every stage landed within ~1–2 SE of its validation estimate, on the
+commitment (94.62, #35), the fused AR decoder (95.20, #53), and the
+clean-data encoder with the corrected prior algebra (95.29, #84). Every
+time, every stage landed within ~1–2 SE of its validation estimate, on the
 positive side — freeze four at +0.08/+0.09/+0.05 for
 streaming/lookahead-1/joint against a prediction of 95.1–95.3 posted before
-the read.
+the read; freeze five at +0.21/+0.08/+0.06 against 94.0–94.2 / 94.8–95.0 /
+95.2–95.4, with the How We Swipe read (82.82 / 82.69) inside its posted
+82.5–83.5 / 82.0–83.0 as well.
 
 ### The tuning did not overfit
 
@@ -1572,6 +1591,7 @@ commit messages.
 | 81 | #8 re-read after #80: the two matched-size checkpoints (`runs/scratch_hws`, `runs/scratch_futo`, 60k swipes each, from scratch) re-scored greedy on the *full* held-out sets (#8 read 20 batches ≈ 5k) with and without a decoder-independent label filter applied identically to both corpora — label outside the English lexicon, wordfreq-foreign, aborted gesture, or label geometry cost/letter > 6 | **#8's "5.5 pts intrinsic" is 1.8.** Full held-out sets: HWS-in-domain 63.71 (n=25,700; #8's 61.8 was the 5k subset) vs FUTO-in-domain 67.28 — gap 3.6, not 5.5; a third of the quoted number was eval-subset noise. The filter drops 5.9% of HWS held-out swipes (410 non-English, 145 foreign, 55 aborted, 898 untraced) vs 2.9% of FUTO val (249 OOV names, 67, 0, 268) — same rule, twice the yield, which is #80 measured from the label side alone. Clean: HWS 66.51 vs FUTO 68.30 — **gap 1.8**. So of the 5.5 the log quoted as corpus difficulty, ~1.9 was measurement, ~1.8 was label quality, ~1.8 remains — and that remainder is the same order as the user-heterogeneity and bad-user "mild" findings #8 left standing. Cross-corpus (scratch_futo on HWS) 54.14 → 56.83 clean. The label filter is in `rerun_matched_size_clean.py`; the same rule can produce a clean-label HWS read for any model | `runs/rerun_matched_size_clean.log` |
 | 82 | two training-data cells on the same seed as `ar_full_s1`, identical recipe: (a) **clean** — `futo_clean/train`, FUTO train minus #81's decoder-independent label filter (1.59% dropped: 11,698 untraced, 2,909 foreign, 3 other); (b) **mixed** — clean FUTO + `hws_clean/train`, the 70%-user half of How We Swipe filtered the same way (56,272 swipes, 5.8% dropped). Val bucketed and McNemar-paired at a common cell; HWS read on the 25,708 swipes of the 30% held-out users that no arm trained on (`hws_heldout/test`, new cache) | **Label cleaning is a null in-domain and +1.0 cross-corpus, the largest training-side cross-corpus gain in the log; 56k real HWS gestures add +2.9 on top for HWS and nothing for FUTO's tail.** Val: s1 92.38 / clean 92.39 / mixed 92.39 beam; paired at α=0.6 λ=0.25 no bucket differs (clean −0.12 overall p=0.32; mixed vs clean on the 6–50 bucket HWS covers, +0.65 p=0.13) — the per-arm-best table's tail→head shift was cell choice, not model. HWS 20k slice, clean vs s1 at the same cell: **+1.01 (623/420, p=4e-10)**, buckets 0 / 1–5 / 6–50 / 51–500 / 500+ = +2.9 / +2.7 / +0.2 / +1.4 / −0.05; +1.27 at the default cell; stacks on #78's λ. Held-out users: s1 80.69 → clean 81.54 (+0.85) → mixed **84.39** (+2.85 more; truth-in-list 95.2 → 96.0). Reading: the 1.6% of training gestures that do not trace their label teach associations FUTO val shares (its labels carry the same noise — hence the in-domain null) and HWS does not; removing them is free cross-corpus robustness. The filter's yield (1.6%) exceeds #79's mislabel estimate (0.2–0.6%), so it also drops the sloppiest correctly-labelled gestures; which of the two carries the gain is untested (threshold sweep). Mixed answers the real-gesture version of #77's existence-vs-discrimination question for FUTO: 63% of val's 6–50-bucket swipes gained ≥1 HWS gesture and the bucket moved +0.65 n.s. — a handful of off-apparatus real examples does not sharpen words the encoder already knows, only teaches unseen ones. For HWS itself, in-domain data is worth +2.9 over the clean FUTO model (#8 measured +2.1 from a CTC fine-tune), and #78's λ and this cleaning both carry over. **Seed-2 replication holds**: clean vs base at seed 2 is val 92.41 vs 92.38, hws 20k 81.66 vs 81.01 (+0.65), held-out users 81.40 vs 80.51 (+0.89) — against seed 1's +1.00 / +0.85. Two seeds, two hws slices, four reads, all +0.65 to +1.0 with in-domain flat; the between-seed spread of the *effect* (~0.2) is the number to quote as its error | `build_clean_caches.py`, `runs/ar_clean_s1/`, `runs/ar_mixed_s1/`, `runs/sweep_clean_*_paired.log`, `runs/*/beam_eval_hws_heldout.log`, `data/canonical/{futo_clean,hws_clean,hws_heldout}/` |
 | 83 | the encoder trunk, swept at matched budget (seed 1, `futo_clean/train`, 10 epochs, ~1.7M params, baseline `ar_clean_s1`): (a) dual-stream front end — time- and arclength-uniform features side by side; (b) hybrid — 6 dilated blocks then 2 self-attention layers; (c) 128 frames instead of 64, same TCN; (d) conformer — 5 macaron-FFN / MHSA / depthwise-conv blocks replacing the convs. Paired McNemar on saved beam predictions (`eval_ar_decoder.py --save-preds`, `compare_hyps.py --lag beam`) | **the trunk is saturated in-domain, as #75 predicted, but not cross-corpus — and the conformer is the first trunk change in this log to move an n-best ceiling.** val beam 92.39 → dual 92.26 (−0.13, p=0.29) / hybrid 92.34 (−0.06, p=0.67) / n128 92.35 (−0.04, p=0.79) / conformer **92.56 (+0.17, p=0.17)**; @8 ceiling 97.8 → 97.7 / 97.7 / 97.8 / 97.7. hws beam 82.08 → dual 81.69 (**−0.39, p=0.017**) / hybrid 81.90 (−0.18, p=0.26) / n128 **82.52 (+0.44, p=0.005)** / conformer **82.39 (+0.31, p=0.048)**; @8 ceiling 92.1 → 91.8 / 92.1 / 92.1 / **92.5**; truth-among-survivors 95.22 → 94.95 / 95.22 / 95.35 / 95.36. Greedy absorbs as always (#17/#18): hybrid's +0.8 hws greedy → −0.18 beam; conformer's +1.0 / +1.0 greedy → +0.17 / +0.31. The arclength stream *hurts* — #71's lesson (timing is the informative axis) from the learned side. n128's gain is not a long-gesture story: bucketed by raw point count the hws gain sits in the 32–64-point / 500–2000 ms / 3–5-letter buckets (+1.0 / +0.9 / +1.3) while FUTO gestures over 128 points or 2 s *lose* 0.5–0.6 — consistent with the Savitzky-Golay window (7 frames = 7·dur/(n−1) seconds) shrinking in time rather than with resolution per se; a hypothesis, not a measurement. The conformer's hws gain has the opposite profile — it *grows* with gesture length (+0.18 / +0.14 / +0.38 / +0.62 across the same four point buckets), the global view paying most where a fixed 64-frame resampling packs the most path into each frame. Costs: conformer 2.0× the TCN's epoch time under the same GPU contention (1170 s vs 585), n128 1.4×; beam decode 739 s vs 843 (attention memory is cheaper than the wider TCN activations). **Seed-2 conformer replicates in-domain and not cross-corpus:** val 92.62 (+0.22 vs baseline, p=0.069; seeds differ by 0.06, p=0.65), hws 82.17 (+0.09, p=0.6; seeds differ by 0.22, p=0.15, i.e. #74's cross-corpus floor), @8 ceiling 97.8 / 92.2, survivors 98.46 / 95.30 — the seed-1 hws ceiling move was seed luck. What stands: a replicated ~+0.2 at the in-domain beam from a same-size trunk, the largest beam-level architecture delta since AR-over-CTC (#46, +0.54), and a cross-corpus delta inside seed noise. **The two positive arms do not compose:** conformer at 128 frames = val 92.48 (+0.09 vs baseline, p=0.46; −0.08 vs the 64-frame conformer, p=0.52), hws 82.30 (+0.22, p=0.18; −0.10 vs conformer, −0.22 vs n128), @8 97.8 / 92.3, survivors 98.45 / 95.39, at 1.6× the conformer's epoch time. Verdict over three conformer runs: in-domain +0.17 / +0.22 / +0.09 (mean +0.16, every run positive, above #74's 0.02 floor), cross-corpus +0.31 / +0.09 / +0.22 (mean +0.21, inside the 0.2 seed floor) — a real, small, replicated first-pass gain from the trunk family at matched size, bought at 2× training time and not yet composed through MMI and the fused search (#17/#18's absorption predicts ~+0.05 at fused joint; unmeasured). Not promoted: a freeze spends a test read, and this delta is below the bar #47 set for one | `model/encoder.py` (`trunk`, `n_attn`, `n_frames`, `dual_stream`), `train_ar_decoder.py --trunk/--n-points/--resample-mode both`, `eval_ar_decoder.py --save-preds`, `compare_beam_buckets.py`, `runs/ar_enc_{dual,hybrid,n128,conformer}*` |
+| 84 | **fifth test freeze: the fused AR decoder on label-cleaned training data with the #78 prior algebra, measured once on the full 48,711 — and, for the first time, all 85,421 swipes of How We Swipe as a once-only read under the same protocol.** The configuration is `scripts/freeze5.py` and nothing else: `ar_clean_s1` (#82a) + one MMI epoch over its own 150k clean-train lists (#48's recipe; val beam 92.39 → 92.66, hws 82.08 → 82.22, greedy −1.2 / −2.1 as always) → 64-wide trie beam, 24-deep lists → fused sentence beam, delta-form gpt2-xl at μ=0.8 with the marginal prior (#66), α=0.6, λ=0.25 mean-ablation (#78), beam 8. Geometry (#73) and the mixed encoder (#82b) deliberately excluded: no single validated weight for the first, a changed meaning for the cross-corpus row from the second. Stages idempotent, outputs under `runs/freeze5/`, the once-only reads refuse to run without a posted prediction | **95.29 joint / 94.95 lookahead-1 / 94.24 streaming, ceiling@24 98.09; How We Swipe zero-shot 82.82 joint / 82.69 lookahead-1 (freeze four read 80.4), ceiling 93.80.** Prediction posted before the read (`runs/freeze5/prediction.json`, 08:11 Sep 3): test 95.2–95.4 / 94.8–95.0 / 94.0–94.2, hws 82.5–83.5 / 82.0–83.0 — every number inside its range except streaming, +0.04 above. Val (95.23 / 94.87 / 94.03) → test +0.06 / +0.08 / +0.21, all on the positive side: five freezes, every stage-level comparison positive. In-domain the headline moves 95.20 → 95.29 (~1 SE) — #78 and #82 were nulls on val and stayed nulls on test, exactly as posted; MMI and deep lists were already in freeze four. That is what this freeze is for: an anchor, one file, every number reproducible from it. The payoff is cross-corpus — **+2.4 on the full 85k with no HWS gesture in training**, label cleaning and the prior algebra composed, both gains carrying from their 20k slices to the whole split. Read cost on the laptop: val 3.8 h, test 15.0 h, hws 8.7 h (lookahead-1 + joint only) | `scripts/freeze5.py`, `runs/freeze5/manifest.json`, `runs/freeze5/fused_{val,test,hws}.log`, `runs/freeze5/hyps_*.npz`, `runs/freeze5/beam_eval_{base,mmi}.log` |
 
 Standing conclusions the log supports:
 
@@ -1708,6 +1728,7 @@ scripts/
   eval_deferred_commit.py hold n-best open across swipes; does right context pay?
   nbest_freq_buckets.py   bucket n-best misses by the target's training count
   run_fused_local.py      one fused sentence-beam config, LM scoring in-search
+  freeze5.py              the frozen configuration, end to end: train → MMI → lists → fused reads → manifest
   compare_hyps.py         paired (McNemar) comparison of two runs' hypotheses
   compare_beam_buckets.py paired first-pass beam preds, bucketed by gesture length / duration / word length
   train_ar_decoder.py     train the AR letter decoder (trunk variants: --trunk, --n-points, --resample-mode both)
