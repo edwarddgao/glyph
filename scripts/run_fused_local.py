@@ -97,6 +97,9 @@ def main() -> None:
         bundle = pickle.load(f)
     lists = bundle["lists"]
     ilm = bundle["ilm"].get(args.mode, {})
+    if args.lam and not ilm:
+        raise SystemExit(f"--lam {args.lam} needs --mode zero|mean (bundle has "
+                         f"{sorted(bundle['ilm'])}); --mode {args.mode} loads no ILM")
     refs = bundle["refs"]
     groups = bundle["groups"]
     n = len(refs)
@@ -274,8 +277,11 @@ def main() -> None:
     def acoustic(cl):
         out = []
         for w, ar, uni, ln in cl:
-            prior = (args.alpha * uni if args.lam == 0.0
-                     else -args.lam * ilm.get(w, 0.0))
+            # #77: unigram and internal-LM subtraction are two halves of one
+            # prior replacement (P_train -> P_ext), so both enter when lam > 0.
+            # Before #77 lam > 0 *replaced* the unigram term; no deployed
+            # config used lam > 0, so no frozen number changes.
+            prior = args.alpha * uni - args.lam * ilm.get(w, 0.0)
             out.append((w, ar + BETA * ln + prior))
         return out
 

@@ -101,9 +101,21 @@ def main() -> None:
                          "training; the layout stays put. Partial-invariance "
                          "knob: 0 = exact anchor, large = shape-only-ish")
     ap.add_argument("--log-every", type=int, default=100)
+    ap.add_argument("--seed", type=int, default=None,
+                    help="seed init, dropout and data order; also offsets the "
+                         "per-epoch augmentation seed by 1000*seed. Runs before "
+                         "this flag existed were unseeded (augmentation seed "
+                         "offset 0).")
     args = ap.parse_args()
 
     device = pick_device(args.device)
+    if args.seed is not None:
+        import random
+        import numpy as np
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+    aug_offset = 1000 * (args.seed or 0)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     cache_root = Path(args.cache)
@@ -202,7 +214,7 @@ def main() -> None:
 
     for epoch in range(args.epochs):
         for ds in train_sets:
-            ds.seed = epoch + 1
+            ds.seed = epoch + 1 + aug_offset
         model.train()
         running, seen, t_epoch = 0.0, 0, time.time()
 
