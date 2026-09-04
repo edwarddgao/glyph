@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>swipe capture</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overscroll-behavior: none; }
+  body {
+    font-family: -apple-system, system-ui, sans-serif;
+    background: #111; color: #eee;
+    display: flex; flex-direction: column;
+    padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom) 0;
+  }
+  #app { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 12px; }
+  h1 { font-size: 20px; }
+  .muted { color: #999; font-size: 14px; line-height: 1.4; }
+  button {
+    font-size: 17px; padding: 12px 16px; border-radius: 10px; border: none;
+    background: #2c6fef; color: white;
+  }
+  button.secondary { background: #333; color: #ddd; }
+  input[type=text] {
+    font-size: 17px; padding: 12px; border-radius: 10px; border: 1px solid #444;
+    background: #1c1c1c; color: #eee; width: 100%;
+  }
+  .row { display: flex; gap: 10px; }
+  .row > * { flex: 1; }
+  #prompt { font-size: 22px; line-height: 1.5; min-height: 68px; }
+  #prompt .w { color: #777; }
+  #prompt .w.cur { color: #fff; background: #2c6fef33; border-radius: 6px; padding: 2px 4px; }
+  #prompt .w.done { color: #4a4; }
+  #progress { font-size: 13px; color: #888; }
+  #kbwrap { margin-top: auto; touch-action: none; position: relative; user-select: none; -webkit-user-select: none; }
+  #grid { position: relative; width: 100%; background: #1a1a1a; border-radius: 8px; }
+  .key {
+    position: absolute; display: flex; align-items: center; justify-content: center;
+    background: #2a2a2a; border-radius: 6px; color: #ddd; font-size: 18px;
+    pointer-events: none;
+  }
+  #trail { position: absolute; inset: 0; pointer-events: none; }
+  #spacer { height: 44px; background: #1a1a1a; border-radius: 8px; margin-top: 6px;
+    display:flex; align-items:center; justify-content:center; color:#555; font-size:13px; }
+  #status { font-size: 13px; color: #6a6; min-height: 18px; }
+  .hidden { display: none !important; }
+  textarea { width: 100%; height: 160px; background: #1c1c1c; color: #ccc; border: 1px solid #444;
+    border-radius: 8px; font-size: 11px; padding: 8px; }
+  label { font-size: 15px; display: block; margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ===== setup screen ===== -->
+  <div id="setup">
+    <h1>swipe capture</h1>
+    <p class="muted" style="margin:10px 0">
+      Two short blocks, same 12 sentences each.<br>
+      <b>Block A</b>: swipe each word on the keyboard drawn here.<br>
+      <b>Block B</b>: swipe the same sentences with your normal iOS keyboard
+      (QuickPath/Gboard) — accept whatever it commits, don't fix errors.
+    </p>
+    <label>Your initials</label>
+    <input type="text" id="who" autocapitalize="off" autocomplete="off" placeholder="edg">
+    <div style="height:12px"></div>
+    <label>Phrase set — pick one you haven't done yet (do the same set for A and B)</label>
+    <select id="pset" style="font-size:17px; padding:10px; border-radius:10px;
+        background:#1c1c1c; color:#eee; border:1px solid #444; width:100%;">
+      <option value="0">set 1</option><option value="1">set 2</option>
+      <option value="2">set 3</option><option value="3">set 4</option>
+      <option value="4">set 5</option><option value="5">set 6</option>
+      <option value="6">set 7</option><option value="7">set 8</option>
+    </select>
+    <div style="height:12px"></div>
+    <div class="row">
+      <button onclick="startA()">Block A — capture</button>
+      <button class="secondary" onclick="startB()">Block B — your keyboard</button>
+    </div>
+    <div style="height:12px"></div>
+    <div id="bkb" class="hidden">
+      <label>Which keyboard will you use in Block B?</label>
+      <div class="row">
+        <button class="secondary" onclick="beginB('quickpath')">Apple QuickPath</button>
+        <button class="secondary" onclick="beginB('gboard')">Gboard</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== block A: capture on drawn keyboard ===== -->
+  <div id="modeA" class="hidden" style="display:flex; flex-direction:column; flex:1; gap:10px;">
+    <div id="progress"></div>
+    <div id="prompt"></div>
+    <div id="status"></div>
+    <div class="row">
+      <button class="secondary" onclick="redoWord()">redo word</button>
+      <button class="secondary" onclick="skipWord()">skip word</button>
+    </div>
+    <div id="kbwrap">
+      <div id="grid"><svg id="trail"></svg></div>
+      <div id="spacer">swipe one word at a time — lift to commit</div>
+    </div>
+  </div>
+
+  <!-- ===== block B: native keyboard ===== -->
+  <div id="modeB" class="hidden" style="display:flex; flex-direction:column; gap:10px;">
+    <div id="progressB"></div>
+    <div id="promptB" style="font-size:22px; line-height:1.5;"></div>
+    <p class="muted">Swipe the whole sentence below with your normal keyboard.
+      Accept every word it commits. Do not correct anything.</p>
+    <input type="text" id="typed" autocapitalize="off" autocomplete="off" spellcheck="true">
+    <button onclick="nextB()">next sentence</button>
+    <div id="statusB" class="muted"></div>
+  </div>
+
+  <!-- ===== done ===== -->
+  <div id="done" class="hidden">
+    <h1>done — thank you</h1>
+    <p class="muted" style="margin:10px 0">All data was posted to the Mac.
+      If anything failed to upload, copy this backup:</p>
+    <textarea id="backup" readonly></textarea>
+    <div style="height:10px"></div>
+    <button class="secondary" onclick="location.reload()">back to start</button>
+  </div>
+
+</div>
+
+<script>
+"use strict";
+// ---- 8 phrase sets, 12 sentences each: 6 everyday + 6 tail-heavy
+// (names, slang, doubled letters). One set per session; no reuse. ----
+const PHRASE_SETS = [
+  [ // set 1 — the pilot set
+    { tag: "everyday", text: "are we still on for dinner tonight" },
+    { tag: "tail",     text: "tell priya i said happy birthday" },
+    { tag: "everyday", text: "i will be there in ten minutes" },
+    { tag: "tail",     text: "lol that was so sus ngl" },
+    { tag: "everyday", text: "can you send me the address" },
+    { tag: "tail",     text: "meet me at blue bottle on divisadero" },
+    { tag: "everyday", text: "that sounds good to me" },
+    { tag: "tail",     text: "omg the coffee there slaps" },
+    { tag: "everyday", text: "what time does the movie start" },
+    { tag: "tail",     text: "gonna grab boba with keiko later" },
+    { tag: "everyday", text: "im on the train right now" },
+    { tag: "tail",     text: "my wifi keeps dropping ugh" },
+  ],
+  [ // set 2
+    { tag: "everyday", text: "did you get my message" },
+    { tag: "tail",     text: "tell rohan the party starts at eight" },
+    { tag: "everyday", text: "running late be there soon" },
+    { tag: "tail",     text: "shes lowkey obsessed with that show" },
+    { tag: "everyday", text: "what do you want for lunch" },
+    { tag: "tail",     text: "grab tacos from la taqueria" },
+    { tag: "everyday", text: "the meeting got moved to friday" },
+    { tag: "tail",     text: "bruh that movie was mid" },
+    { tag: "everyday", text: "let me know when you land" },
+    { tag: "tail",     text: "my cousin mateo turns three tomorrow" },
+    { tag: "everyday", text: "i think we need more time" },
+    { tag: "tail",     text: "yall better hurry up fr" },
+  ],
+  [ // set 3
+    { tag: "everyday", text: "can we reschedule for next week" },
+    { tag: "tail",     text: "aisha said the concert was insane" },
+    { tag: "everyday", text: "im heading home now" },
+    { tag: "tail",     text: "this coffee shop has terrible wifi" },
+    { tag: "everyday", text: "do you need anything from the store" },
+    { tag: "tail",     text: "ngl the new update kinda slaps" },
+    { tag: "everyday", text: "that works for me" },
+    { tag: "tail",     text: "we got boba on valencia street" },
+    { tag: "everyday", text: "sorry i missed your call" },
+    { tag: "tail",     text: "tell auntie priyanka i love her" },
+    { tag: "everyday", text: "see you at the gym later" },
+    { tag: "tail",     text: "deadass thought it was friday" },
+  ],
+  [ // set 4
+    { tag: "everyday", text: "are you free this weekend" },
+    { tag: "tail",     text: "sofia and diego are engaged omg" },
+    { tag: "everyday", text: "the package should arrive today" },
+    { tag: "tail",     text: "the dumplings on clement street slap" },
+    { tag: "everyday", text: "ill call you after work" },
+    { tag: "tail",     text: "tbh i barely slept last night" },
+    { tag: "everyday", text: "what should we watch tonight" },
+    { tag: "tail",     text: "my roommate keeps stealing my cheese" },
+    { tag: "everyday", text: "thanks for the reminder" },
+    { tag: "tail",     text: "vibes were immaculate at the wedding" },
+    { tag: "everyday", text: "traffic is really bad right now" },
+    { tag: "tail",     text: "hes sus about the group project" },
+  ],
+  [ // set 5
+    { tag: "everyday", text: "just got out of the shower" },
+    { tag: "tail",     text: "kenji brought matcha cookies to work" },
+    { tag: "everyday", text: "the game starts in an hour" },
+    { tag: "tail",     text: "lmao she really said that" },
+    { tag: "everyday", text: "can you pick up the kids" },
+    { tag: "tail",     text: "the sunset at ocean beach was unreal" },
+    { tag: "everyday", text: "i left my keys at home" },
+    { tag: "tail",     text: "bro really ghosted the whole group chat" },
+    { tag: "everyday", text: "lets try that new place" },
+    { tag: "tail",     text: "auntie meera makes the best chai" },
+    { tag: "everyday", text: "hows your mom doing" },
+    { tag: "tail",     text: "finna head out in ten" },
+  ],
+  [ // set 6
+    { tag: "everyday", text: "where did you park the car" },
+    { tag: "tail",     text: "santiago scored twice in the finals" },
+    { tag: "everyday", text: "dinner is ready come downstairs" },
+    { tag: "tail",     text: "ok that fit is fire" },
+    { tag: "everyday", text: "i sent you the photos" },
+    { tag: "tail",     text: "the karaoke bar on geary was packed" },
+    { tag: "everyday", text: "the doctor pushed my appointment" },
+    { tag: "tail",     text: "my succulents keep dying idk why" },
+    { tag: "everyday", text: "we should leave by seven" },
+    { tag: "tail",     text: "noodles at that ramen spot hit different" },
+    { tag: "everyday", text: "did the mail come yet" },
+    { tag: "tail",     text: "cousin fatima graduates in may" },
+  ],
+  [ // set 7
+    { tag: "everyday", text: "hope you feel better soon" },
+    { tag: "tail",     text: "dmitri fixed my laptop yesterday" },
+    { tag: "everyday", text: "the printer is out of ink again" },
+    { tag: "tail",     text: "istg the bus is always late" },
+    { tag: "everyday", text: "want to split an uber" },
+    { tag: "tail",     text: "peep the new mural on mission street" },
+    { tag: "everyday", text: "class got cancelled this morning" },
+    { tag: "tail",     text: "her puppy misha is so fluffy" },
+    { tag: "everyday", text: "ill text you the details" },
+    { tag: "tail",     text: "brunch at tartine then thrifting after" },
+    { tag: "everyday", text: "we ran out of milk" },
+    { tag: "tail",     text: "goofy ahh weather today" },
+  ],
+  [ // set 8
+    { tag: "everyday", text: "almost done with my homework" },
+    { tag: "tail",     text: "giannis dropped forty points last night" },
+    { tag: "everyday", text: "turn left at the light" },
+    { tag: "tail",     text: "no cap that concert was bussin" },
+    { tag: "everyday", text: "the flight got delayed two hours" },
+    { tag: "tail",     text: "meet ingrid at dolores park at noon" },
+    { tag: "everyday", text: "whats the wifi password here" },
+    { tag: "tail",     text: "the burritos there are lowkey overrated" },
+    { tag: "everyday", text: "remember to water the plants" },
+    { tag: "tail",     text: "happy birthday amara see you tonight" },
+    { tag: "everyday", text: "my phone is about to die" },
+    { tag: "tail",     text: "oomf keeps posting cryptic tweets" },
+  ],
+];
+let PHRASES = PHRASE_SETS[0];
+
+// ---- canonical keyboard geometry (matches layout.py) ----
+// x in [0,1] spans the 10 key columns; y in [0,1] spans the 3 letter rows.
+// Row x-offsets 0.0 / 0.05 / 0.15 in normalized-x units.
+const ROWS = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
+const ROW_OFF = [0.0, 0.05, 0.15];
+const GRID_ASPECT = 2.2;   // rendered width / height of the letter grid
+
+const $ = id => document.getElementById(id);
+let session = "", mode = "", nativeKb = "", setNum = 0;
+
+function pickSet() {
+  setNum = parseInt($("pset").value, 10);
+  PHRASES = PHRASE_SETS[setNum];
+}
+let saved = [];            // everything captured this session (for backup box)
+
+function post(payload) {
+  saved.push(payload);
+  return fetch("/save", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then(r => r.ok).catch(() => false);
+}
+
+// ================= block A =================
+let pi = 0, wi = 0, pts = [], swiping = false, gestures = [];
+
+function startA() {
+  session = ($("who").value || "anon").trim().toLowerCase();
+  pickSet();
+  mode = "capture";
+  $("setup").classList.add("hidden");
+  $("modeA").classList.remove("hidden");
+  buildKeyboard();
+  pi = 0; wi = 0; gestures = [];
+  renderPrompt();
+}
+
+function startB() { $("bkb").classList.remove("hidden"); }
+
+function words() { return PHRASES[pi].text.split(" "); }
+
+function renderPrompt() {
+  $("progress").textContent = `sentence ${pi + 1} / ${PHRASES.length}`;
+  $("prompt").innerHTML = words().map((w, i) =>
+    `<span class="w ${i < wi ? "done" : i === wi ? "cur" : ""}">${w}</span>`
+  ).join(" ");
+}
+
+function buildKeyboard() {
+  const grid = $("grid");
+  const W = grid.clientWidth || grid.getBoundingClientRect().width;
+  const H = Math.round(W / GRID_ASPECT);
+  grid.style.height = H + "px";
+  const kw = W / 10, kh = H / 3, pad = 2;
+  for (const [r, row] of ROWS.entries()) {
+    for (const [c, ch] of [...row].entries()) {
+      const k = document.createElement("div");
+      k.className = "key"; k.textContent = ch;
+      k.style.left   = (ROW_OFF[r] * W + c * kw + pad) + "px";
+      k.style.top    = (r * kh + pad) + "px";
+      k.style.width  = (kw - 2 * pad) + "px";
+      k.style.height = (kh - 2 * pad) + "px";
+      grid.appendChild(k);
+    }
+  }
+  grid.addEventListener("pointerdown", e => {
+    grid.setPointerCapture(e.pointerId);
+    swiping = true; pts = [];
+    addPoint(e); drawTrail();
+    e.preventDefault();
+  });
+  grid.addEventListener("pointermove", e => {
+    if (!swiping) return;
+    // use coalesced events for full-rate touch samples where supported
+    const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    for (const ev of evs) addPoint(ev);
+    drawTrail();
+    e.preventDefault();
+  });
+  grid.addEventListener("pointerup", e => {
+    if (!swiping) return;
+    swiping = false; addPoint(e); drawTrail();
+    commitGesture();
+    e.preventDefault();
+  });
+  grid.addEventListener("pointercancel", () => { swiping = false; pts = []; drawTrail(); });
+}
+
+function addPoint(e) {
+  const r = $("grid").getBoundingClientRect();
+  pts.push({
+    x: (e.clientX - r.left) / r.width,
+    y: (e.clientY - r.top) / r.height,
+    t: performance.now(),
+  });
+}
+
+function drawTrail() {
+  const r = $("grid").getBoundingClientRect();
+  const svg = $("trail");
+  svg.setAttribute("viewBox", `0 0 ${r.width} ${r.height}`);
+  svg.innerHTML = pts.length < 2 ? "" :
+    `<polyline points="${pts.map(p => `${p.x * r.width},${p.y * r.height}`).join(" ")}"
+       fill="none" stroke="#2c6fef" stroke-width="4" stroke-linecap="round" opacity="0.8"/>`;
+}
+
+function commitGesture() {
+  // a single-letter word IS a tap — only treat taps as stray for longer words
+  const minPts = words()[wi].replace(/[^a-z]/g, "").length === 1 ? 1 : 3;
+  if (pts.length < minPts) { pts = []; drawTrail(); return; }
+  const t0 = pts[0].t;
+  const r = $("grid").getBoundingClientRect();
+  gestures.push({
+    word: words()[wi].replace(/[^a-z]/g, ""),
+    word_idx: wi,
+    x: pts.map(p => +p.x.toFixed(4)),
+    y: pts.map(p => +p.y.toFixed(4)),
+    t: pts.map(p => Math.round(p.t - t0)),
+    aspect: r.width / r.height,
+    grid_px: { w: Math.round(r.width), h: Math.round(r.height) },
+  });
+  $("status").textContent = `captured "${words()[wi]}" (${pts.length} pts)`;
+  pts = []; drawTrail();
+  advance();
+}
+
+function redoWord() {
+  // drop the last gesture for the current sentence, step back one word
+  if (wi > 0) { wi--; gestures = gestures.filter(g => g.word_idx !== wi); }
+  renderPrompt();
+  $("status").textContent = "";
+}
+
+function skipWord() { advance(true); }
+
+function advance(skipped) {
+  if (skipped) $("status").textContent = `skipped "${words()[wi]}"`;
+  wi++;
+  if (wi >= words().length) {
+    const payload = {
+      kind: "capture", session, set: setNum + 1, ts: Date.now(),
+      sentence: PHRASES[pi].text, tag: PHRASES[pi].tag,
+      ua: navigator.userAgent, gestures,
+    };
+    post(payload).then(ok => {
+      $("status").textContent = ok ? "sentence uploaded ✓" : "upload FAILED — kept in backup";
+    });
+    gestures = []; wi = 0; pi++;
+    if (pi >= PHRASES.length) return finish();
+  }
+  renderPrompt();
+}
+
+// ================= block B =================
+let bi = 0, bStart = 0;
+
+function beginB(kb) {
+  session = ($("who").value || "anon").trim().toLowerCase();
+  pickSet();
+  mode = "native"; nativeKb = kb;
+  $("setup").classList.add("hidden");
+  $("modeB").classList.remove("hidden");
+  bi = 0;
+  renderB();
+}
+
+function renderB() {
+  $("progressB").textContent = `sentence ${bi + 1} / ${PHRASES.length}  ·  keyboard: ${nativeKb}`;
+  $("promptB").textContent = PHRASES[bi].text;
+  $("typed").value = "";
+  $("statusB").textContent = "";
+  bStart = Date.now();
+  $("typed").focus();
+}
+
+function nextB() {
+  const typed = $("typed").value.trim();
+  if (!typed) { $("statusB").textContent = "swipe the sentence first"; return; }
+  post({
+    kind: "native", session, set: setNum + 1, keyboard: nativeKb, ts: Date.now(),
+    sentence: PHRASES[bi].text, tag: PHRASES[bi].tag,
+    typed, ms: Date.now() - bStart, ua: navigator.userAgent,
+  }).then(ok => { if (!ok) $("statusB").textContent = "upload FAILED — kept in backup"; });
+  bi++;
+  if (bi >= PHRASES.length) return finish();
+  renderB();
+}
+
+// ================= finish =================
+function finish() {
+  $("modeA").classList.add("hidden");
+  $("modeB").classList.add("hidden");
+  $("done").classList.remove("hidden");
+  $("backup").value = JSON.stringify(saved);
+}
+</script>
+</body>
+</html>
