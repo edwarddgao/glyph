@@ -42,4 +42,4 @@ handles. Every attempt is uploaded with the prompted word under a random id;
 nothing typed on the keyboard ever is. That data is what will settle the
 question above, and it is what the next model trains on.
 
-Repo: https://github.com/edwarddgao/glyph — TestFlight link in the README.
+Repo: https://github.com/edwarddgao/glyph — TestFlight: https://testflight.apple.com/join/ZAXsVCWz

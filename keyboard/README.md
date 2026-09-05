@@ -124,6 +124,8 @@ team (or an App Store Connect API key in `../research/iphone/.secrets/`:
 `asc_key.p8`, `asc_key_id`, `asc_issuer_id`), refuses to run without the
 upload token, and stamps the build number `yyyymmddHHMM` like `deploy.sh`.
 `./release.sh --archive` validates the Release build on a personal team.
+App Store Connect record: "Glyph Swipe Keyboard" (the bare name was taken),
+public TestFlight link https://testflight.apple.com/join/ZAXsVCWz.
 The Info.plist declares `ITSAppUsesNonExemptEncryption = false` (HTTPS
 only) and the privacy policy the store listing links is served by the
 Worker at `/privacy`.
