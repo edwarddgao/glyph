@@ -46,7 +46,9 @@ from eval_decoder import build_lexicon  # noqa: E402
 BLOCK = set("""fuck fucking fucked fucker fuckin shit shitty bullshit bitch bitches asshole ass dick cock pussy cunt
 whore slut nigga nigger faggot fag retard retarded rape raped rapist nazi hitler kill killed killing murder suicide
 porn sex sexy sexual nude naked penis vagina orgasm cum horny damn hell crap piss pissed bastard douche jerk moron
-idiot stupid dumb terrorist bomb shoot shooting gun drugs cocaine heroin meth weed""".split())
+idiot stupid dumb terrorist bomb shoot shooting gun guns drugs cocaine heroin meth weed
+death deaths dead die died dying killer police cops arrested prison jail war torture abuse abused assault victim victims
+cancer disease tumor hospital funeral corpse blood bleeding hate hatred racist racism slave slavery""".split())
 
 
 # People swipe words and tap abbreviations. A prompt must be something one would

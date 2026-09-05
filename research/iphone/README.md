@@ -151,6 +151,30 @@ user's slower swipes score no better than the fast ones. So gesture quality
 both are known for every game swipe: the cost from the path, the rarity from
 the prompt. Nothing about the gesture goes unmeasured into the training set.
 
+**Should the LM bonus be clamped?** The practice records showed the fused
+search turning a correct first pass into a surname at sentence starts ("hes"
+→ "hess", "about" → "scott"): the marginal prior is averaged over mid-sentence
+contexts where names are rare, so a name's sentence-start conditional sits
+2.5–3 nats above its marginal. `scripts/eval_lm_clamp.py` scores the fix
+candidates on the shipped stack (AR first pass, distilgpt2, lookahead 1) over
+both replay sets:
+
+| variant | iPhone words | everyday | tail | first word | FUTO | FUTO first word | first-pass-correct words flipped (iPhone / FUTO) |
+|---|---|---|---|---|---|---|---|
+| current | **78.1** | 87.7 | **69.1** | 67.7 | **94.1** | **92.7** | 8 / 7 |
+| clamp bonus at 3 | 76.8 | 86.6 | 67.7 | 68.8 | 93.3 | 92.7 | 5 / 7 |
+| clamp at 2 | 76.1 | 85.1 | 67.7 | 66.7 | 93.3 | 92.7 | 5 / 5 |
+| clamp at 1 | 75.5 | 85.1 | 66.7 | 67.7 | 93.1 | 92.0 | 3 / 2 |
+| clamp at 0 | 73.5 | 82.8 | 64.9 | 65.6 | 93.1 | 92.0 | 4 / 1 |
+| no LM on the first word | 77.9 | **88.1** | 68.4 | **70.8** | **94.1** | 92.0 | 8 / 6 |
+
+Not adopted. The flips are 8 of 543 words (1.5%) and every clamp that removes
+some of them loses more elsewhere: the same large positive bonuses that
+promote "hess" are what rescue rare correct words in context. Switching the LM
+off for the first word is a wash overall (+3.1 on the iPhone first word, −0.7
+on FUTO's, n.s. both), consistent with the sentence-initial finding in the
+main README. The shipped form stays; the surname flips are a known cost.
+
 Replay timing calibration (`testTimingCalibration`: straight 600 ms swipes
 at several event spacings, the Swipe extension reporting what it received).
 Simulator: events closer than ~33 ms burst, and a 33 ms path arrives ~1.2×
