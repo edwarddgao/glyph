@@ -144,7 +144,10 @@ struct DetailsSheet: View {
                         Text(AboutText.body).font(.subheadline).foregroundStyle(.secondary)
                         Link(destination: URL(string: AboutText.repo)!) { Label("Source, models and the research log", systemImage: "chevron.left.forwardslash.chevron.right") }
                             .font(.subheadline)
-                        Text("build \(UploadConfig.build)").font(.caption2).foregroundStyle(.tertiary)
+                        Link(destination: URL(string: AboutText.privacy)!) { Label("Privacy policy", systemImage: "hand.raised") }
+                            .font(.subheadline)
+                        Text("build \(UploadConfig.build) · install id \(UserDefaults.standard.string(forKey: "race.session") ?? "assigned at first practice")")
+                            .font(.caption2).foregroundStyle(.tertiary)
                     }
                 }
                 .padding(24)

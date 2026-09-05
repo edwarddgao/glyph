@@ -67,6 +67,7 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: Glyph
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: App/Info.plist
       properties:
@@ -78,6 +79,8 @@ targets:
         GlyphUploadToken: ${GLYPH_UPLOAD_TOKEN}
         GlyphBuild: ${GLYPH_BUILD}
         CFBundleShortVersionString: "0.1"
+        # HTTPS only, no proprietary cryptography: exempt from export compliance.
+        ITSAppUsesNonExemptEncryption: false
         CFBundleVersion: ${GLYPH_BUILD}
         # HTTPS to the Worker needs no exception; local networking lets a
         # developer point the game at research/iphone/server.py on a LAN.

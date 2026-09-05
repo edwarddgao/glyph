@@ -88,6 +88,7 @@ struct HomeView: View {
 
 enum AboutText {
     static let repo = "https://github.com/edwarddgao/glyph"
+    static let privacy = "https://swipe-upload.swipe-edwardgao.workers.dev/privacy"
     static let body = """
     Glyph decodes a swipe with a small transformer trained on public swipe corpora, a 300k-word trie and a sentence \
     language model (distilgpt2), all running on the phone's CPU. The benchmark replays the same recorded finger paths \

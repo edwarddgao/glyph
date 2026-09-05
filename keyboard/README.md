@@ -14,6 +14,8 @@ keyboard/
   UITests/               drives the real extension in the simulator; replay benchmark; race test
   project.yml            xcodegen spec -> Glyph.xcodeproj
   deploy.sh              build + sign + install on a connected iPhone
+  release.sh             archive + upload to App Store Connect (TestFlight)
+  tools/make_icon.py     renders App/Assets.xcassets (the swipe trail of "glyph")
 ```
 
 ## What ships
@@ -114,14 +116,24 @@ xcodegen generate
 free personal team works, the install then expires after 7 days) and an
 iPhone with Developer Mode on, plugged in and trusting the Mac. On the phone
 afterwards: Settings › General › Keyboard › Keyboards › Add New Keyboard… ›
-Swipe, then hold 🌐 in any app and pick Swipe.
+Glyph, then hold 🌐 in any app and pick Glyph.
+
+TestFlight: `./release.sh` archives a Release build, exports it for App Store
+Connect and uploads it. It needs Xcode signed in to a paid Apple Developer
+team (or an App Store Connect API key in `../research/iphone/.secrets/`:
+`asc_key.p8`, `asc_key_id`, `asc_issuer_id`), refuses to run without the
+upload token, and stamps the build number `yyyymmddHHMM` like `deploy.sh`.
+`./release.sh --archive` validates the Release build on a personal team.
+The Info.plist declares `ITSAppUsesNonExemptEncryption = false` (HTTPS
+only) and the privacy policy the store listing links is served by the
+Worker at `/privacy`.
 
 Simulator (no signing needed):
 
 ```
-xcodebuild -project Glyph.xcodeproj -scheme SwipeKeyboard \
+xcodebuild -project Glyph.xcodeproj -scheme Glyph \
   -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath build \
-  CODE_SIGNING_ALLOWED=NO test -only-testing:SwipeKeyboardUITests
+  CODE_SIGNING_ALLOWED=NO test -only-testing:GlyphUITests/GlyphUITests
 ```
 
 The UI test adds the keyboard through the Settings app, switches to it via

@@ -19,11 +19,13 @@
 	<key>CFBundleShortVersionString</key>
 	<string>0.1</string>
 	<key>CFBundleVersion</key>
-	<string>202609050603</string>
+	<string>202609051457</string>
 	<key>GlyphBuild</key>
-	<string>202609050603</string>
+	<string>202609051457</string>
 	<key>GlyphUploadToken</key>
 	<string>1d4abea6264051412a637b02b4f1d350e23916df8b7cf271</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
