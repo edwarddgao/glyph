@@ -368,7 +368,7 @@ final class RaceGame: ObservableObject {
             "device": RaceStore.shared.deviceModelName, "ios": UIDevice.current.systemVersion,
             "screen": ["w": screen.width, "h": screen.height],
             "grid": ["width": NativeMetrics.gridWidth(screen.width), "rowPitch": NativeMetrics.rowPitch, "aspect": Self.aspect],
-            "lm": lm != nil, "ua": "swipe-app-race",
+            "lm": lm != nil, "ua": "swipe-app-race", "build": UploadConfig.build,
             "acceptance": ["rule": "trace", "cost_per_letter_max": GestureTrace.untracedCostPerLetter],
         ]
         RaceStore.shared.save(rec)
