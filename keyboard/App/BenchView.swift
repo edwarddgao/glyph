@@ -10,7 +10,7 @@ struct BenchView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("gesture replay bench").font(.headline)
+            Text("Try Glyph").font(.headline)
             TextField("", text: $text, axis: .vertical)
                 .lineLimit(3...6)
                 .textInputAutocapitalization(.sentences)

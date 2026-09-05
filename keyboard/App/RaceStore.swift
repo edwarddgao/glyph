@@ -37,7 +37,10 @@ final class RaceStore {
     }
 
     /// Upload every queued file; delete each on a 200.
+    /// UI tests and screenshot runs pass --no-upload: records stay queued on the simulator, nothing reaches the bucket.
+    static let uploadsDisabled = CommandLine.arguments.contains("--no-upload")
     func flush() {
+        if Self.uploadsDisabled { return }
         guard UploadConfig.enabled || server != UploadConfig.productionURL else { return }   // no token: keep records queued
         guard let url = URL(string: server) else { onStatus?("bad server URL"); return }
         let files = ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [])

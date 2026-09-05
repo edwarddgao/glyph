@@ -7,7 +7,7 @@ import XCTest
 /// Requires the keyboard to be enabled in the simulator first:
 ///   xcrun simctl spawn <udid> defaults write com.apple.Preferences AppleKeyboards \
 ///     -array com.edwardgao.glyph.keyboard "en_US@sw=QWERTY;hw=Automatic"
-final class GlyphUITests: XCTestCase {
+class GlyphUITests: XCTestCase {   // subclassed by StoreScreenshotTests
     let shots = ProcessInfo.processInfo.environment["SWIPE_SHOTS"]
 
     func snap(_ name: String) {
@@ -233,7 +233,7 @@ final class EmojiPanelTests: XCTestCase {
 final class RaceUITests: XCTestCase {
     func testRaceAcceptsSwipedWord() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["--race", "--race-set", "1"]
+        app.launchArguments = ["--race", "--race-set", "1", "--no-upload"]
         app.launch()
         let start = app.buttons["raceStart"]
         XCTAssertTrue(start.waitForExistence(timeout: 10))
@@ -290,7 +290,7 @@ extension RaceUITests {
     /// A normal race (no --race-set) draws from the bundled prompt pool.
     func testRaceDrawsFromPool() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["--race"]
+        app.launchArguments = ["--race", "--no-upload"]
         app.launch()
         let start = app.buttons["raceStart"]
         XCTAssertTrue(start.waitForExistence(timeout: 10))
