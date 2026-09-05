@@ -46,6 +46,13 @@ have a fixed, known geometry.
   converts them. Replay benchmark: `tools/replay_bench.py`, results in
   `research/iphone/README.md`.
 
+Pre-ship lever audit (2026-09-05, research log #85, iphone/README): the
+shipped stack is at or within noise of the best cell for every encoder in
+`runs/`, every sentence-stage knob, GPT-2-family LM size, touch offset,
+time scaling and ~270-swipe per-user adaptation. Do not re-run those; the
+one open lever is a modern-text LM (SmolLM2-360M: +1.2 FUTO, level on
+iPhone), a post-launch port.
+
 Replay benchmarks: before launching simulator runs, check headroom
 (`top -l 1 | grep -E 'CPU usage|PhysMem'`, `memory_pressure`) and scale
 the fan-out to it — an 18-core/64 GB Mac idles at two sims. Shard one

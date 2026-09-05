@@ -177,6 +177,127 @@ off for the first word is a wash overall (+3.1 on the iPhone first word, −0.7
 on FUTO's, n.s. both), consistent with the sentence-initial finding in the
 main README. The shipped form stays; the surname flips are a known cost.
 
+**Pre-ship lever audit (2026-09-05).** Before release, every lever the
+shipped stack had not tried was read on the two replay sets (543 iPhone
+words, 1,337 FUTO words), each variant paired word by word against the shipped
+configuration (`scripts/eval_phone_levers.py`; adaptation in
+`scripts/probe_user_adapt.py`). Offline shipped stack: AR `ar_mixed_s1`, trie
+beam 64, α 0.6 β 1.2 λ 0.25, distilgpt2 delta-form μ 0.8, lookahead 1, lists
+of 8, sentence beam 8 — 78.5 / 94.2 here (the phone's beam 32 lists: 78.1 /
+94.1; first pass 73.1 vs 73.3, truth in beam 91.2 vs 93.6). On 543 words a
+point is ~5 discordant words, so the smallest effect this set can certify at
+p < 0.05 is about 2.5 points; FUTO's 1,337 resolve about 1.5.
+
+*Encoders.* Every AR checkpoint in the run library, first pass, shipped
+ranking. The two lists of discordant counts are (shipped right / variant
+right) on the iPhone words and on FUTO:
+
+| encoder | iPhone | in top-8 | in beam | everyday | tail | 1st word | FUTO | discordant, p |
+|---|---|---|---|---|---|---|---|---|
+| `ar_mixed_s1` (shipped) | **73.3** | 89.1 | 93.6 | 81.6 | 65.6 | 68.8 | 92.7 | — |
+| + one MMI epoch (#48 recipe, `runs/ar_mixed_mmi`) | **74.0** | 89.9 | 93.6 | 82.0 | 66.7 | 66.7 | 92.6 | 11/7 p=0.48 ; 11/12 p=1.0 |
+| conformer trunk (#83) | 72.6 | 89.0 | 93.0 | 78.2 | **67.4** | 65.6 | 92.8 | 21/25 p=0.66 ; 19/17 p=0.87 |
+| conformer, seed 2 | 71.6 | 87.7 | 93.6 | 79.7 | 64.2 | 65.6 | 92.0 | 21/30 p=0.26 ; 12/21 p=0.16 |
+| `ar_clean_s1` (#82a) | 71.6 | 88.6 | 92.8 | 79.3 | 64.5 | 64.6 | 92.1 | 17/26 p=0.22 ; 15/23 p=0.26 |
+| 128 frames (#83c) | 70.7 | 88.0 | 93.0 | 77.4 | 64.5 | 61.5 | 91.8 | 20/34 p=0.08 ; 16/28 p=0.10 |
+| d_model 192 (#75) | 71.1 | 86.9 | 92.6 | 78.5 | 64.2 | 60.4 | 91.7 | 16/28 p=0.10 ; 17/30 p=0.08 |
+| d_model 256 (#75) | 69.2 | 89.3 | 93.4 | 75.9 | 63.1 | 58.3 | 92.2 | 14/36 p<0.01 ; 17/23 p=0.43 |
+| `ar_full` continued 6 epochs | 70.3 | 87.7 | 92.8 | 77.8 | 63.5 | 60.4 | 91.5 | 15/31 p=0.03 ; 14/29 p=0.03 |
+| permutation mixture (#55) | 69.8 | 89.1 | 92.3 | 74.7 | 65.2 | 61.5 | 92.2 | 17/36 p=0.01 ; 15/21 p=0.41 |
+| `ar_full` + MMI (#48) | 68.9 | 86.0 | 91.2 | 75.9 | 62.4 | 58.3 | 92.3 | 15/39 p<0.01 ; 17/22 p=0.52 |
+
+Nothing beats the shipped encoder on the iPhone set. The MMI epoch on it is
+the only variant ahead (+0.7 first pass, +0.8 top-8 coverage, n.s.) and the
+fused stage absorbs it as it did in #48/#84: 77.9 vs 78.5 (5/8, p=0.58),
+FUTO 94.2 both. The conformer ties, with the best tail and a worse everyday
+bucket — one seed each, and the second conformer seed is lower, so no reason
+to retrain the mixed set on it before release.
+
+*Sentence stage,* shipped lists. Variants one knob at a time, then combined:
+
+| variant | iPhone | everyday | tail | 1st word | FUTO | FUTO 1st | discordant, p |
+|---|---|---|---|---|---|---|---|
+| shipped (M 8, μ 0.8, α 0.6, λ 0.25, beam 8) | 78.5 | 88.5 | 69.1 | 67.7 | 94.2 | 92.7 | — |
+| lists of 16 / 24 | 78.3 / 78.3 | 88.5 | 68.8 | 67.7 | 94.1 | 92.7 | 0/1 ; 0/1 |
+| μ 0.6 | 78.8 | 88.9 | 69.5 | 70.8 | 94.0 | 92.7 | 8/6 p=0.79 ; 2/4 p=0.69 |
+| μ 1.0 / 1.2 | 78.1 / 78.1 | 88.5 / 88.9 | 68.4 / 68.1 | 66.7 | 94.0 | 92.0 | 1/3 ; 4/6 |
+| first-word μ 0.4 | 78.5 | 88.9 | 68.8 | **71.9** | 94.3 | **93.3** | 4/4 p=1.0 ; 2/0 p=0.50 |
+| first-word μ 0 (LM off on word 1) | 78.3 | 88.9 | 68.4 | 70.8 | 94.2 | 92.0 | 6/7 ; 2/2 |
+| α 0.4 | 77.7 | 88.1 | 68.1 | 65.6 | 94.1 | 92.0 | 0/4 p=0.12 ; 1/2 |
+| λ 0 (no ILM subtraction) | 76.8 | 87.4 | 67.0 | 65.6 | 93.9 | 92.0 | 3/12 **p=0.04** ; 8/11 p=0.65 |
+| sentence beam 16 / 4 | 78.5 / 78.3 | | | | 94.2 / 94.1 | | 0/0 ; 0/1 |
+| M 24, μ 1.0, first-word μ 0.4 | 78.8 | 90.0 | 68.4 | 70.8 | 94.1 | 93.3 | 7/5 p=0.77 ; 4/5 p=1.0 |
+
+The truth is in the beam for 93.6% of iPhone swipes but in the top-8 list for
+89.1% — 4.5 points of coverage the sentence stage never sees — yet deeper
+lists move nothing: the words that rank 9th–64th acoustically are not
+rescued by the LM either. The shipped knobs sit at the optimum of the grid;
+λ 0.25 is the one setting the set can certify (+1.7, p=0.04). The first-word
+μ (halve the LM's weight on the sentence-initial word, where the marginal
+prior is least appropriate) is +4.2 on the iPhone first word and +0.6 on
+FUTO's, both n.s., and a wash overall — the same shape as the clamp study
+above. Not adopted.
+
+*Language model,* shipped lists, same delta form and marginal prior (Qwen has
+no BOS token; EOS stands in). Only the GPT-2 family is a drop-in for the
+phone's tokenizer:
+
+| LM | params | iPhone | everyday | 1st word | FUTO | discordant, p |
+|---|---|---|---|---|---|---|
+| distilgpt2 (shipped) | 82M | 78.5 | 88.5 | 67.7 | 94.2 | — |
+| gpt2 | 124M | 78.8 | 88.9 | 66.7 | 94.5 | 6/4 p=0.75 ; 11/6 p=0.33 |
+| gpt2-medium | 355M | 79.0 | 90.0 | 66.7 | 94.4 | 14/11 p=0.69 ; 10/7 p=0.63 |
+| SmolLM2-135M | 135M | 76.8 | 88.5 | 65.6 | 95.1 | 9/18 p=0.12 ; 18/6 **p=0.02** |
+| SmolLM2-360M | 360M | 78.5 | 88.9 | 68.8 | **95.4** | 17/17 p=1.0 ; 21/4 **p<0.001** |
+| Qwen3-0.6B-Base | 0.6B | 76.2 | 85.8 | 61.5 | 94.6 | 12/24 p=0.07 ; 16/10 p=0.33 |
+| Qwen3.5-0.8B-Base | 0.8B | 75.3 | 85.4 | 60.4 | 94.0 | 11/28 **p=0.01** ; 15/17 p=0.86 |
+
+Within the GPT-2 family, 4× the parameters buys +0.3 on both sets, inside
+noise (#66's ladder said the same up to xl). The one significant positive of
+the whole audit is SmolLM2-360M on FUTO: +1.2 (p<0.001) at gpt2-medium's size,
+so it is the 2024 training text, not the parameter count — and it is level on
+the iPhone set (17/17). The two Qwen bases lose on the iPhone set, mostly on
+the first word (61.5 / 60.4 vs 67.7), where the missing BOS makes the
+sentence-start conditional ill-defined; the mechanism is not measured. A
+SmolLM2 port would need a Llama-architecture Core ML export, a second
+tokenizer vocabulary, and ~4× the LM latency (distilgpt2 is 21 ms per batch
+of 16 on the phone). Deferred: the only open lever this audit found, and one
+whose gain the iPhone set does not show.
+
+*Geometry and speed.* The iPhone gestures land systematically right of the
+key centre — start +0.15 key widths, end +0.29 (medians +0.15 / +0.26), y
++0.04 / +0.07 — where FUTO's donors sit at +0.01 / +0.07. Removing the mean
+offset before featurization changes nothing on the iPhone set (73.3, 21/21)
+and costs FUTO 1.4 (10/28, p=0.01); y-only shifts of ±0.1 key cost 0.2–2.0
+(y −0.1: 71.3, p=0.02). The augmentation's ±15% scale and jitter already
+cover this user's offset; there is no calibration to ship. Time-scaling the
+gestures toward the corpus donors' speed hurts monotonically — t×1.5: 71.5,
+t×2: 69.2 (14/36, p<0.001), t×0.5: 64.6 — and FUTO likewise (92.1 / 91.8 /
+90.2): the encoder reads absolute timing and prefers each population at its
+own speed. No speed normalization to ship either.
+
+*Per-user adaptation.* The regime the practice records would feed. Two-fold by
+sentence over the 543 gestures: fine-tune the shipped encoder on one half
+(~270 swipes, 40 epochs, LR 1e-4, training augmentation), read the other half.
+
+| arm | iPhone (held-out, both folds) | everyday | tail | FUTO |
+|---|---|---|---|---|
+| shipped, no adaptation | 73.3 | 81.6 | 65.6 | 92.7 |
+| user swipes only | 74.2 (30/25, p=0.59) | 80.5 | 68.4 | 90.3 / 90.4 (p<0.001) |
+| user swipes + FUTO replay 1:4 | 74.2 (22/17, p=0.52) | 81.2 | 67.7 | 92.3 / 92.0 (p=0.38 / 0.09) |
+
++0.9, not significant, with the replay needed to keep everyone else's
+accuracy. 270 of a user's swipes do not move their own accuracy detectably;
+the per-user adaptation regime (#58) starts further out than one practice
+session reaches. Consequence for the data plan: the records are for the next
+shared model, not for on-device personalization at this scale.
+
+**Verdict: nothing is left on the table that this evidence can see.** Eleven
+encoders, twelve sentence-stage settings, seven language models, offset,
+speed and adaptation — the shipped configuration is at or within noise of the
+best cell everywhere, and the one certified gain (a modern-text LM, on FUTO
+only) is a post-launch port.
+
 Replay timing calibration (`testTimingCalibration`: straight 600 ms swipes
 at several event spacings, the Swipe extension reporting what it received).
 Simulator: events closer than ~33 ms burst, and a 33 ms path arrives ~1.2×

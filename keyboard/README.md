@@ -76,7 +76,9 @@ and the keyboard run the identical stack without doubling the install.
   per-token error. Measured on the phone: 21 ms per batch of 16 for
   distilgpt2 on CPU, so a swipe's LM work is 20–85 ms.
 
-Not shipped (yet): the geometry channel, MMI on the mixed encoder, and
+Not shipped: the geometry channel; MMI on the mixed encoder (measured
+09-05: +0.7 first pass on the iPhone set, absorbed by the sentence stage —
+research/iphone/README "Pre-ship lever audit"); and
 the Neural Engine path (9–12 ms per batch, +29 MB, but a 2–5 s compile on
 first load) — worth revisiting if CPU latency shows.
 
