@@ -1,0 +1,24 @@
+# SwipeRacer upload endpoint: a Cloudflare Worker writing records into an R2 bucket.
+#
+#   npx wrangler login                       # once, in a browser
+#   npx wrangler r2 bucket create swipe-races
+#   npx wrangler secret put UPLOAD_TOKEN     # what the app sends (research/iphone/.secrets/upload_token)
+#   npx wrangler secret put ADMIN_TOKEN      # what sync_race.py sends (research/iphone/.secrets/admin_token)
+#   npx wrangler deploy                      # prints https://swipe-upload.<account>.workers.dev
+name = "swipe-upload"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+
+[[r2_buckets]]
+binding = "RACES"
+bucket_name = "swipe-races"
+
+# 60 uploads per minute per client IP (a race produces one record per ~10 s).
+[[unsafe.bindings]]
+name = "RATE"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 60, period = 60 }
+
+[observability]
+enabled = true

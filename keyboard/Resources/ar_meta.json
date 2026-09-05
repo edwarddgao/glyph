@@ -1,0 +1,1 @@
+{"checkpoint": "runs/ar_mixed_s1/ar_decoder.pt", "beam": 32, "max_word_len": 24, "vocab": 28, "bos": 26, "eos": 27, "d_model": 128}

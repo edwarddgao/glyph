@@ -1,0 +1,6 @@
+build/
+SwipeKeyboard.xcodeproj/
+SwipeCore/.build/
+SwipeCore/.swiftpm/
+*.xcuserstate
+.DS_Store

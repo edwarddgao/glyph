@@ -1,0 +1,1 @@
+{"model": "distilgpt2", "quant": "fp16", "B": 16, "L": 32, "P": 6, "eos": 50256, "bos": 50256}

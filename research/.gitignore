@@ -1,0 +1,13 @@
+data/
+runs/
+.env
+*.pyc
+__pycache__/
+.venv/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+*.pkl
+fused_search_modal.log
+.secrets/
