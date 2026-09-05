@@ -125,6 +125,7 @@ final class RaceGame: ObservableObject {
     func loadDecoder() {
         guard decoder == nil else { return }
         loadStatus = "loading decoder…"
+        DispatchQueue.global(qos: .utility).async { _ = Self.pool }   // decode the prompt pool (~150k sentences) off the main thread
         Self.loader.load { [weak self] r in
             Task { @MainActor in
                 guard let self else { return }

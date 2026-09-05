@@ -74,7 +74,9 @@ BAND_W = {"tail": 3.0, "mid": 1.5, "head": 0.3}
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--n", type=int, default=3000)
+    ap.add_argument("--n", type=int, default=150000)
+    ap.add_argument("--cap-mid", type=int, default=40, help="linear selection: max occurrences of a mid-band word before it stops counting as coverage")
+    ap.add_argument("--cap-tail", type=int, default=15)
     ap.add_argument("--everyday-frac", type=float, default=0.4, help="share of the pool with every word zipf >= 3.5 (the game races 3 everyday : 2 tail)")
     ap.add_argument("--min-words", type=int, default=4)
     ap.add_argument("--max-words", type=int, default=9)
@@ -107,7 +109,18 @@ def main() -> None:
     chosen = []
 
     def pick(remaining, k):
-        # greedy coverage gain; `counts` is shared so the tail stratum does not re-buy words the everyday one has
+        # Coverage selection. Small pools: exact greedy by gain (O(N²)). Large pools: one linear pass
+        # in shuffled order, keeping a sentence while it still teaches — a mid word seen fewer than
+        # --cap-mid times or a tail word fewer than --cap-tail — so the budget goes to breadth and
+        # "the" rides along with the sentences it appears in rather than being bought.
+        if len(remaining) > 20000:
+            cap = {"head": 10**9, "mid": a.cap_mid, "tail": a.cap_tail}
+            for c in remaining:
+                if len(chosen) >= k: break
+                if any(counts[w] < cap[band(z)] and band(z) != "head" for w, z in zip(c["words"], c["zipf"])):
+                    for w in c["words"]: counts[w] += 1
+                    chosen.append(c)
+            remaining.clear(); return
         while len(chosen) < k and remaining:
             best_i, best_gain = -1, -1.0
             for i, c in enumerate(remaining):
@@ -123,14 +136,15 @@ def main() -> None:
     print(f"  {len(everyday)} everyday, {len(tail)} tail candidates", flush=True)
     pick(everyday, int(round(a.n * a.everyday_frac)))
     pick(tail, a.n)
+    # ids are the sentence's position; the app walks them without repeats per player
     rng.shuffle(chosen)
 
     out = {"version": 1, "sentences": []}
     for i, c in enumerate(chosen):
+        # the app needs id/text/source/tag; per-word zipf stays out of the bundle (it is recomputable)
         out["sentences"].append({"id": i, "text": c["text"], "source": c["source"],
-                                 "tag": "tail" if min(c["zipf"]) < 3.5 else "everyday",
-                                 "zipf": [round(z, 2) for z in c["zipf"]]})
-    Path(a.out).write_text(json.dumps(out))
+                                 "tag": "tail" if min(c["zipf"]) < 3.5 else "everyday"})
+    Path(a.out).write_text(json.dumps(out, separators=(",", ":")))
 
     words = Counter(w for c in chosen for w in c["words"])
     bands = Counter(band(z) for c in chosen for z in c["zipf"])

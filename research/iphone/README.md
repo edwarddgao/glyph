@@ -30,12 +30,14 @@ iPhone, judged against Apple's QuickPath on identical input. Nothing in
   under an anonymous per-install id. Prompts come from the coverage-chosen
   pool `keyboard/Resources/race_prompts.json` (`scripts/build_race_prompts.py`:
   real tweets / reddit / WildChat text, in-lexicon, blocklist-clean, 3
-  everyday + 2 tail per race). Current pool: 3,000 sentences (1,200
-  everyday, 1,800 tail) from 13,658 candidates, 22,072 word tokens, 8,376
-  distinct words (947 head / 4,995 mid / 2,434 tail by zipf band), 548 of
-  the 646 letter bigrams in the 50k most frequent lexicon words; "the" is
-  the most repeated word at 868, i.e. 4% of tokens against 5–6% in running
-  English. `prompt_source` = phraseset marks the eight hand-written sets the
+  everyday + 2 tail per race). Current pool: 107,159 sentences (60,000
+  everyday, 47,159 tail) selected by coverage caps from 178,984 candidates
+  (150k reddit, 174k WildChat, 26k tweets — all of tweet_eval), 733k word
+  tokens, 36,792 distinct words (1,012 head / 12,472 mid / 23,308 tail by
+  zipf band; FUTO's training set has 65k), 602 of the 646 letter bigrams in
+  the 50k most frequent lexicon words; 10 MB in the bundle, decoded off the
+  main thread. A player sees 21,000 sessions before a repeat.
+  `prompt_source` = phraseset marks the eight hand-written sets the
   first races used.
   `race_to_capture.py` turns them into `capture_*_race.json` (one gesture per
   word, the same shape as above) and prints per-player first-swipe accuracy.
