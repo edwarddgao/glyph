@@ -3,6 +3,7 @@
 #
 #   ./release.sh              # archive, export for App Store Connect, upload
 #   ./release.sh --archive    # archive only (works on a personal team; validates the build)
+#   ./release.sh --export     # export + upload the existing build/Glyph.xcarchive
 #
 # Needs Xcode signed in to a paid Apple Developer team (Settings › Accounts) —
 # a personal team cannot sign for distribution. Optional: an App Store
@@ -21,8 +22,10 @@ if [[ -z "${GLYPH_UPLOAD_TOKEN:-}" && "$MODE" != "--archive" ]]; then
 fi
 
 mkdir -p build
-# Team: env, else the first non-personal team Xcode knows about.
+# Team: env (trusted as given), else the first non-personal team Xcode knows about.
+KIND=env
 if [[ -z "${DEVELOPMENT_TEAM:-}" ]]; then
+  rm -f build/.team_kind
   DEVELOPMENT_TEAM=$(defaults export com.apple.dt.Xcode - 2>/dev/null | python3 -c '
 import plistlib, sys
 d = plistlib.loads(sys.stdin.buffer.read()).get("IDEProvisioningTeamByIdentifier", {})
@@ -30,8 +33,8 @@ teams = [t for ts in d.values() for t in ts]
 paid = [t["teamID"] for t in teams if t.get("teamType") != "Personal Team"]
 any_ = [t["teamID"] for t in teams]
 print((paid or any_ or [""])[0]); print("paid" if paid else "personal", file=sys.stderr)' 2>build/.team_kind || true)
+  KIND=$(cat build/.team_kind 2>/dev/null || echo unknown)
 fi
-KIND=$(cat build/.team_kind 2>/dev/null || echo unknown)
 if [[ -z "${DEVELOPMENT_TEAM:-}" ]]; then echo "No team. Sign in to Xcode or pass DEVELOPMENT_TEAM=<id>." >&2; exit 1; fi
 if [[ "$KIND" == "personal" && "$MODE" != "--archive" ]]; then
   echo "Xcode only knows the personal team $DEVELOPMENT_TEAM; distribution needs the paid team. Open Xcode › Settings › Accounts and let it refresh, or pass DEVELOPMENT_TEAM=<paid team id>." >&2; exit 1
@@ -41,6 +44,10 @@ echo "team $DEVELOPMENT_TEAM ($KIND), build $GLYPH_BUILD, upload token $([[ -n "
 DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" GLYPH_UPLOAD_TOKEN="${GLYPH_UPLOAD_TOKEN:-}" GLYPH_BUILD="$GLYPH_BUILD" xcodegen generate >/dev/null
 
 ARCHIVE=build/Glyph.xcarchive
+if [[ "$MODE" == "--export" ]]; then
+  [[ -d "$ARCHIVE" ]] || { echo "no $ARCHIVE to export" >&2; exit 1; }
+  GLYPH_BUILD=$(plutil -extract ApplicationProperties.CFBundleVersion raw "$ARCHIVE/Info.plist")
+else
 rm -rf "$ARCHIVE"
 echo "archiving…"
 if ! xcodebuild -project Glyph.xcodeproj -scheme Glyph -configuration Release \
@@ -50,6 +57,7 @@ if ! xcodebuild -project Glyph.xcodeproj -scheme Glyph -configuration Release \
 fi
 echo "archived $ARCHIVE ($(plutil -extract ApplicationProperties.CFBundleVersion raw "$ARCHIVE/Info.plist" 2>/dev/null || echo '?'))"
 [[ "$MODE" == "--archive" ]] && exit 0
+fi
 
 cat > build/ExportOptions.plist <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -71,7 +79,7 @@ if [[ -f "$SECRETS/asc_key.p8" && -f "$SECRETS/asc_key_id" && -f "$SECRETS/asc_i
 fi
 echo "exporting and uploading…"
 if ! xcodebuild -exportArchive -archivePath "$ARCHIVE" -exportOptionsPlist build/ExportOptions.plist \
-    -exportPath build/export -allowProvisioningUpdates "${AUTH[@]}" > build/export.log 2>&1; then
+    -exportPath build/export -allowProvisioningUpdates ${AUTH[@]+"${AUTH[@]}"} > build/export.log 2>&1; then
   grep -E 'error:|error |Error' build/export.log | head -20 >&2; echo "export/upload failed (build/export.log)" >&2; exit 1
 fi
 grep -E 'Upload succeeded|EXPORT SUCCEEDED|Uploaded' build/export.log | head -3 || true
