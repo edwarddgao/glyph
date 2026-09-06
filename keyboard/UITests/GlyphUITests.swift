@@ -171,12 +171,24 @@ class GlyphUITests: XCTestCase {   // subclassed by StoreScreenshotTests
         XCTAssertTrue(weSlots.contains("we"), "w->e should surface 'we' in the bar: \(weSlots)")
         XCTAssertEqual(weSlots[1], weWord, "middle pill is the inserted word: '\(weText)'")
 
-        // 5. backspace removes one character
-        let before = text().count
+        // 5. backspace right after a swipe takes the whole word (and its space) back; the next one removes a character
+        let before = text()
         deleteKey.tap()
         sleep(1)
-        XCTAssertEqual(text().count, before - 1, "backspace")
+        XCTAssertEqual(text(), String(before.dropLast(weWord.count + 1)), "backspace after a swipe removes the word")
+        let afterWord = text().count
+        deleteKey.tap()
+        sleep(1)
+        XCTAssertEqual(text().count, afterWord - 1, "second backspace removes one character")
         snap("06_after_backspace")
+
+        // 6. held delete: characters first, then whole words — three seconds clears what is left
+        key("t").press(forDuration: 0.05, thenDragTo: key("o"), withVelocity: .slow, thenHoldForDuration: 0.05)
+        sleep(1)
+        XCTAssertFalse(text().isEmpty)
+        deleteKey.press(forDuration: 3.0)
+        sleep(1)
+        XCTAssertEqual(text(), "", "held delete clears the field: '\(text())'")
     }
 }
 
@@ -235,18 +247,11 @@ final class RaceUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--race", "--race-set", "1", "--no-upload"]
         app.launch()
-        let start = app.buttons["raceStart"]
-        XCTAssertTrue(start.waitForExistence(timeout: 10))
-        // the decoder loads in the background; the button title flips to "Race" when ready
-        let ready = NSPredicate(format: "label BEGINSWITH 'Start'")
-        XCTAssertTrue(start.waitForExistence(timeout: 5))
-        _ = XCTNSPredicateExpectation(predicate: ready, object: start)
-        XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: ready, object: start)], timeout: 120)
-        start.tap()
+        // Practice starts as soon as the decoder has loaded (first launch compiles the Core ML models).
         let pad = app.otherElements["racePad"]
-        XCTAssertTrue(pad.waitForExistence(timeout: 10))
+        XCTAssertTrue(pad.waitForExistence(timeout: 120))
         let sentence = app.otherElements["raceSentence"]
-        XCTAssertTrue(sentence.waitForExistence(timeout: 10))
+        XCTAssertTrue(sentence.waitForExistence(timeout: 120))
         let first = String(sentence.label.split(separator: " ").first ?? "")
         XCTAssertTrue(first.count >= 2 && first.allSatisfy { $0.isLetter }, "first word: \(first)")
         // pad frame -> grid geometry (same numbers as the keyboard: NativeMetrics)
@@ -292,12 +297,8 @@ extension RaceUITests {
         let app = XCUIApplication()
         app.launchArguments = ["--race", "--no-upload"]
         app.launch()
-        let start = app.buttons["raceStart"]
-        XCTAssertTrue(start.waitForExistence(timeout: 10))
-        XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label BEGINSWITH 'Start'"), object: start)], timeout: 120)
-        start.tap()
         let sentence = app.otherElements["raceSentence"]
-        XCTAssertTrue(sentence.waitForExistence(timeout: 10))
+        XCTAssertTrue(sentence.waitForExistence(timeout: 120))
         let words = sentence.label.split(separator: " ")
         XCTAssertTrue((4...9).contains(words.count), "pool sentences are 4–9 words: \(sentence.label)")
         XCTAssertFalse(sentence.label.isEmpty)
@@ -319,7 +320,7 @@ final class OnboardingUITests: XCTestCase {
         let sentence = app.otherElements["raceSentence"]
         XCTAssertTrue(sentence.waitForExistence(timeout: 120))
         XCTAssertTrue(app.staticTexts["sentence 1 / 3"].waitForExistence(timeout: 5), "onboarding races three sentences")
-        XCTAssertFalse(app.buttons["quit"].exists, "no skip in onboarding")
+        XCTAssertFalse(app.buttons["Quit"].exists, "no skip in onboarding")
         let png = XCUIScreen.main.screenshot().pngRepresentation
         if let dir = ProcessInfo.processInfo.environment["SWIPE_SHOTS"] { try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent("onboarding_race.png")) }
     }
@@ -344,6 +345,6 @@ final class ScreenshotTests: XCTestCase {
             _ = a2.buttons["onboardingDone"].waitForExistence(timeout: 10); a2.buttons["onboardingDone"].tap(); sleep(1); shot(a2, "04_home"); a2.terminate()
         } else { sleep(1); shot(app, "04_home") }
         let r = XCUIApplication(); r.launchArguments = ["--race"]; r.launch()
-        _ = r.buttons["raceStart"].waitForExistence(timeout: 10); sleep(1); shot(r, "05_race_intro")
+        _ = r.otherElements["racePad"].waitForExistence(timeout: 120); sleep(1); shot(r, "05_race")
     }
 }

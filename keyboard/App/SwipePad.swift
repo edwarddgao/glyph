@@ -22,8 +22,8 @@ struct SwipePad: UIViewRepresentable {
     /// of which 34 is the home-indicator safe area SwiftUI already leaves. Measured
     /// from tools/measure_layout.py on QuickPath (bottom-row keys at y 753, h 43).
     static let systemBottomBar: CGFloat = 35.5
-    /// The predictive bar's slot above the letters (the extension's suggestion bar);
-    /// the game shows the target sentence there so the eyes never leave the keyboard.
+    /// The predictive bar's slot above the letters (the extension's suggestion bar):
+    /// blank in practice, so the pad keeps the real keyboard's geometry.
     static let barHeight: CGFloat = NativeMetrics.barHeight
     /// Bar, three letter rows, the bottom row (123 · emoji · space · return), the
     /// keyboard's bottom pad — plus the system bar when pinned.

@@ -25,10 +25,14 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         set { UserDefaults.standard.set(newValue, forKey: "swipe.lm.enabled") }
     }
 
-    private func statusText() -> String {
+    /// The bar before the first swipe: a hint, plus the one state a user must
+    /// know about (the sentence model switched off). Memory and load state go
+    /// into the label's accessibility value for the benchmark, never on screen.
+    private func showStatus() {
         let avail = availableMemoryMB()
-        if !lmEnabled { return "swipe a word · \(avail) MB free · first pass (LM off)" }
-        return "swipe a word · \(avail) MB free · \(lmLabel.isEmpty ? "LM loading" : lmLabel)"
+        let lm = !lmEnabled ? "LM off" : (lmLabel.isEmpty ? "LM loading" : lmLabel)
+        let text = lmEnabled ? "swipe a word" : "swipe a word · sentence model off · hold 123 to turn on"
+        keyboardView.showStatus(text, detail: "\(avail) MB free · \(lm)")
     }
 
     static let sharedLoad = DecoderLoader()
@@ -48,7 +52,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         keyboardView.inputModeButton.addTarget(self, action: #selector(handleInputModeList(from:with:)), for: .allTouchEvents)
         keyboardView.grid.onDiagnostic = { diag($0) }
         diag("extension start; available memory \(availableMemoryMB()) MB")
-        keyboardView.showStatus("loading decoder…")
+        keyboardView.showStatus("loading…")
         Self.sharedLoad.load { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -58,7 +62,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
                     let avail = availableMemoryMB()
                     diag("decoder loaded; available memory \(avail) MB")
                     UserDefaults.standard.set(avail, forKey: "swipe.probe.availMB")
-                    self.keyboardView.showStatus(self.statusText())
+                    self.showStatus()
                     Self.sharedLoad.loadLM { [weak self] result in
                         DispatchQueue.main.async {
                             guard let self else { return }
@@ -76,17 +80,18 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
                                 let avail2 = availableMemoryMB()
                                 self.lmLabel = "LM ok"
                                 diag("LM loaded; available memory \(avail2) MB")
-                                self.keyboardView.showStatus(self.statusText())
+                                self.showStatus()
                             case .failure(let e):
                                 self.lmLabel = "no LM (\(e))"
                                 diag("LM failed: \(e)")
-                                self.keyboardView.showStatus(self.statusText())
+                                self.showStatus()
                             }
                         }
                     }
                 case .failure(let e):
-                    self.loadError = "\(e)"
-                    self.keyboardView.showStatus("decoder failed: \(e)")
+                    self.loadError = "Glyph could not load — open the Glyph app once"
+                    diag("decoder failed: \(e)")
+                    self.keyboardView.showStatus(self.loadError!, detail: "\(e)")
                 }
             }
         }
@@ -217,7 +222,28 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
 
     func keyboardViewDidTapBackspace(_ view: KeyboardView) {
         resetSentence()
-        proxy.deleteBackward()
+        // Right after a swipe, backspace takes the whole word (and its space) back,
+        // as Gboard and QuickPath do; the next press deletes by character.
+        if let last = lastSwipe, (proxy.documentContextBeforeInput ?? "").hasSuffix(last.word + " ") {
+            for _ in 0..<(last.word.count + 1) { proxy.deleteBackward() }
+        } else {
+            proxy.deleteBackward()
+        }
+        lastSwipe = nil
+        keyboardView.clearSuggestions()
+        updateShiftFromContext()
+    }
+
+    func keyboardViewDidDeleteWord(_ view: KeyboardView) {
+        resetSentence()
+        // Trailing whitespace, then the run of non-whitespace before it — the system keyboard's unit.
+        let before = proxy.documentContextBeforeInput ?? ""
+        var n = 0, inWord = false
+        for ch in before.reversed() {
+            if ch.isWhitespace { if inWord { break } } else { inWord = true }
+            n += 1
+        }
+        for _ in 0..<max(n, 1) { proxy.deleteBackward() }
         lastSwipe = nil
         keyboardView.clearSuggestions()
         updateShiftFromContext()
@@ -233,7 +259,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
 
     func keyboardView(_ view: KeyboardView, didSwipe samples: [TouchSample]) {
         guard let decoder else {
-            keyboardView.showStatus(loadError ?? "loading decoder…")
+            keyboardView.showStatus(loadError ?? "loading…")
             return
         }
         if let f = samples.first, let l = samples.last {
@@ -252,12 +278,12 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         let t0 = CFAbsoluteTimeGetCurrent()
         let cands: [Candidate]
         do { cands = try decoder.decode(samples) } catch {
-            keyboardView.showStatus("decode error: \(error)")
+            keyboardView.showStatus("could not read that swipe", detail: "\(error)")
             return
         }
         let firstPassMs = (CFAbsoluteTimeGetCurrent() - t0) * 1000
         guard let best = cands.first else {
-            keyboardView.showStatus(String(format: "no word (%.0f ms)", firstPassMs))
+            keyboardView.showStatus("no word for that swipe", detail: String(format: "%.0f ms", firstPassMs))
             return
         }
         // Without an LM (off, or failed to load), first pass only.
@@ -332,7 +358,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         resetSentence()
         lastSwipe = nil
         diag("LM toggled \(lmEnabled ? "on" : "off")")
-        keyboardView.showStatus(statusText())
+        showStatus()
     }
 
     func keyboardView(_ view: KeyboardView, didPickSuggestion index: Int) {

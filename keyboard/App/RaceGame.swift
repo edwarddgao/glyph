@@ -21,7 +21,7 @@ struct Phrase { let tag: String; let text: String }
 
 @MainActor
 final class RaceGame: ObservableObject {
-    enum Phase { case intro, loading, racing, sentenceDone, raceDone }
+    enum Phase { case intro, loading, racing, raceDone }
     enum WordState { case pending, done, skipped }
 
     @Published var phase: Phase = .intro
@@ -51,9 +51,29 @@ final class RaceGame: ObservableObject {
     @Published var raceFirstTry = 0
     @Published var raceWords = 0
     @Published var raceSkipped = 0
+    /// Words the decoder read right (accepted swipes whose reading matched, plus taps) — the
+    /// number a player can act on; trace accuracy is ~100% by construction.
+    @Published var raceRead = 0
+    /// The round's finished sentences, for the summary: every word with its verdict,
+    /// the decoder's reading and the accepted swipe itself.
+    struct RoundSentence: Identifiable {
+        let id: Int
+        let words: [String]
+        let states: [WordState]
+        let costs: [Double?]
+        let decoded: [String?]
+        /// Canonical-coordinate samples of the accepted swipe (nil for taps and skips).
+        let samples: [[TouchSample]?]
+    }
+    @Published var roundSentences: [RoundSentence] = []
+    private var acceptedSamples: [[TouchSample]?] = []
+    /// The finished sentence stays on screen for a beat before the next one; input is ignored meanwhile.
+    @Published var betweenSentences = false
     @Published var raceSeconds: TimeInterval = 0
     @Published var sentenceResults: [(wpm: Double, firstTry: Int, words: Int)] = []
     @AppStorage("race.bestWPM") var bestWPM: Double = 0
+    @AppStorage("race.lastWPM") var lastWPM: Double = 0
+    @AppStorage("race.lastPrecision") var lastPrecision: Double = 0
     @AppStorage("race.nick") var nick = ""
     @AppStorage("race.races") var racesPlayed = 0
 
@@ -119,6 +139,7 @@ final class RaceGame: ObservableObject {
     private var attemptsPerWord: [Int] = []
 
     var lmReady: Bool { lm != nil }
+    var loadFailed: Bool { loadStatus.hasPrefix("decoder failed") }
 
     // MARK: lifecycle
 
@@ -159,7 +180,7 @@ final class RaceGame: ObservableObject {
         }
         guard !sentences.isEmpty else { loadStatus = "decoder failed: no prompt pool in the bundle"; return }
         sentenceIndex = 0
-        raceAttempts = 0; raceAccepted = 0; raceFirstTry = 0; raceWords = 0; raceSkipped = 0; raceSeconds = 0
+        raceAttempts = 0; raceAccepted = 0; raceFirstTry = 0; raceWords = 0; raceSkipped = 0; raceRead = 0; raceSeconds = 0; roundSentences = []; betweenSentences = false
         sentenceResults = []
         uploadStatus = !UploadConfig.enabled ? "no upload token in this build — records stay on the phone"
             : RaceStore.shared.pendingCount > 0 ? "\(RaceStore.shared.pendingCount) earlier records pending upload" : ""
@@ -174,6 +195,7 @@ final class RaceGame: ObservableObject {
         wordCosts = Array(repeating: nil, count: words.count)
         decodedWords = Array(repeating: nil, count: words.count)
         attemptsPerWord = Array(repeating: 0, count: words.count)
+        acceptedSamples = Array(repeating: nil, count: words.count)
         wordIndex = 0; attemptsOnWord = 0; lastDecoded = nil; lastRead = nil; flashWrong = false
         gestures = []
         elapsed = 0; sentenceStart = nil; firstTouch = nil
@@ -194,6 +216,8 @@ final class RaceGame: ObservableObject {
 
     private func finishRace() {
         racesPlayed += 1
+        lastWPM = raceWPM
+        lastPrecision = racePrecision
         if raceWPM > bestWPM { bestWPM = raceWPM }
         phase = .raceDone
     }
@@ -215,6 +239,14 @@ final class RaceGame: ObservableObject {
     private var sentenceCharsDone: Int { words.prefix(wordIndex).reduce(0) { $0 + $1.count + 1 } }
     var raceWPM: Double { wpm(chars: sentences.prefix(sentenceResults.count).reduce(0) { $0 + $1.text.count }, seconds: raceSeconds) }
     var raceAccuracy: Double { raceAttempts > 0 ? Double(raceAccepted) / Double(raceAttempts) * 100 : 0 }
+    /// 0–100 from a swipe's trace cost per letter: 100 on the ideal path, 0 at the
+    /// acceptance cut (6 per letter). Median accepted swipes sit near 1.4, so ~77.
+    static func precision(cost: Double) -> Double { max(0, 1 - cost / GestureTrace.untracedCostPerLetter) * 100 }
+    /// Mean precision over the round's swiped words (taps and skips excluded).
+    var racePrecision: Double {
+        let costs = roundSentences.flatMap { s in zip(s.costs, s.samples).compactMap { c, p in p == nil ? nil : c } }
+        return costs.isEmpty ? 0 : costs.map(Self.precision).reduce(0, +) / Double(costs.count)
+    }
     var raceFirstTryPct: Double { raceWords > 0 ? Double(raceFirstTry) / Double(raceWords) * 100 : 0 }
 
     private func startClock() {
@@ -235,7 +267,7 @@ final class RaceGame: ObservableObject {
     /// the tap is recorded as an attempt (no path, `input: "tap"`) and never
     /// enters the swipe corpus. A tap on a longer word is just a hint.
     func handleTap(_ ch: Character) {
-        guard phase == .racing, let word = currentWord, !busy else { return }
+        guard phase == .racing, !betweenSentences, let word = currentWord, !busy else { return }
         guard word.count == 1 else { lastDecoded = "swipe the word, don't tap"; lastRead = nil; return }
         startClock()
         let idx = wordIndex, attempt = attemptsPerWord[idx] + 1
@@ -246,7 +278,7 @@ final class RaceGame: ObservableObject {
         if accepted {
             raceAccepted += 1
             if attempt == 1 { raceFirstTry += 1 }
-            wordStates[idx] = .done; wordCosts[idx] = 0; decodedWords[idx] = String(ch)
+            wordStates[idx] = .done; wordCosts[idx] = 0; decodedWords[idx] = String(ch); raceRead += 1
             lastDecoded = nil; lastRead = nil
             advance()
         } else {
@@ -258,7 +290,7 @@ final class RaceGame: ObservableObject {
     }
 
     func handleSwipe(_ samples: [TouchSample]) {
-        guard phase == .racing, let decoder, let word = currentWord, !busy else { return }
+        guard phase == .racing, !betweenSentences, let decoder, let word = currentWord, !busy else { return }
         if word.count == 1 { lastDecoded = "tap “\(word)” — one letter, no swipe"; lastRead = nil; return }
         startClock()
         busy = true
@@ -311,6 +343,8 @@ final class RaceGame: ObservableObject {
                     self.wordStates[idx] = .done
                     self.wordCosts[idx] = traceCost
                     self.decodedWords[idx] = decoded
+                    if decoderRight { self.raceRead += 1 }
+                    self.acceptedSamples[idx] = samples
                     self.lastDecoded = nil; self.lastRead = nil
                     self.advance()
                 } else {
@@ -326,7 +360,7 @@ final class RaceGame: ObservableObject {
 
     /// Offered after two misses; the word is recorded as skipped (its attempts are kept).
     func skipWord() {
-        guard phase == .racing, wordIndex < words.count else { return }
+        guard phase == .racing, !betweenSentences, wordIndex < words.count else { return }
         wordStates[wordIndex] = .skipped
         wordCosts[wordIndex] = nil
         raceSkipped += 1
@@ -348,8 +382,16 @@ final class RaceGame: ObservableObject {
         raceSeconds += seconds
         let firstTry = zip(attemptsPerWord, wordStates).filter { $0 == 1 && $1 == .done }.count
         sentenceResults.append((wpm(chars: sentenceChars, seconds: seconds), firstTry, words.count))
-        phase = .sentenceDone
+        roundSentences.append(RoundSentence(id: sentenceIndex, words: words, states: wordStates, costs: wordCosts, decoded: decodedWords, samples: acceptedSamples))
         upload(seconds: seconds)
+        // No card between sentences: the finished line shows green for a beat, then the next one comes.
+        betweenSentences = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard self.phase == .racing, self.betweenSentences else { return }
+            self.betweenSentences = false
+            self.nextSentence()
+        }
     }
 
     private func upload(seconds: TimeInterval) {

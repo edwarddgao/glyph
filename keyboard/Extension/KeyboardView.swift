@@ -6,6 +6,8 @@ protocol KeyboardViewDelegate: AnyObject {
     func keyboardView(_ view: KeyboardView, didTapText text: String)
     func keyboardViewDidTapSpace(_ view: KeyboardView)
     func keyboardViewDidTapBackspace(_ view: KeyboardView)
+    /// Held delete, escalated: remove the word before the cursor and the spaces after it.
+    func keyboardViewDidDeleteWord(_ view: KeyboardView)
     func keyboardViewDidTapReturn(_ view: KeyboardView)
     func keyboardView(_ view: KeyboardView, didSwipe samples: [TouchSample])
     func keyboardView(_ view: KeyboardView, didPickSuggestion index: Int)
@@ -76,6 +78,7 @@ final class KeyboardView: UIView {
         grid.onSwipe = { [weak self] pts in guard let s = self else { return }; s.delegate?.keyboardView(s, didSwipe: pts) }
         grid.onShift = { [weak self] in self?.toggleShift() }
         grid.onBackspace = { [weak self] in guard let s = self else { return }; s.delegate?.keyboardViewDidTapBackspace(s) }
+        grid.onBackspaceWord = { [weak self] in guard let s = self else { return }; s.delegate?.keyboardViewDidDeleteWord(s) }
         addSubview(grid)
 
         symbolGrid.onText = { [weak self] t in guard let s = self else { return }; s.delegate?.keyboardView(s, didTapText: t) }
@@ -88,9 +91,12 @@ final class KeyboardView: UIView {
         returnButton.accessibilityLabel = "return"
         layerButton.accessibilityIdentifier = "layer"
         layerButton.addTarget(self, action: #selector(toggleSymbols), for: .touchUpInside)
+        // A benchmark control, not a feature: long enough that a resting thumb
+        // never trips it, and the off state announces itself in the bar.
         let lmPress = UILongPressGestureRecognizer(target: self, action: #selector(layerLongPressed(_:)))
-        lmPress.minimumPressDuration = 0.8
+        lmPress.minimumPressDuration = 2.0
         layerButton.addGestureRecognizer(lmPress)
+        for b in [layerButton, secondButton, spaceButton, returnButton] { b.addTarget(self, action: #selector(keyDown), for: .touchDown) }
         spaceButton.addTarget(self, action: #selector(spaceTapped), for: .touchUpInside)
         returnButton.addTarget(self, action: #selector(returnTapped), for: .touchUpInside)
         if !needsGlobe { secondButton.addTarget(self, action: #selector(emojiTapped), for: .touchUpInside) }
@@ -168,8 +174,12 @@ final class KeyboardView: UIView {
     /// middle slot's accessibility value.
     func setGestureDebug(_ text: String) { slotButtons[1].accessibilityValue = text }
 
-    func showStatus(_ text: String) {
+    /// `text` is what the user sees; `detail` (memory, LM state) rides along as
+    /// the label's accessibility value, so the replay benchmark can read it
+    /// without it ever appearing on screen.
+    func showStatus(_ text: String, detail: String = "") {
         statusLabel.text = text
+        statusLabel.accessibilityValue = detail
         statusLabel.isHidden = false
         pill.isHidden = true
         for b in slotButtons { b.isHidden = true }
@@ -224,6 +234,7 @@ final class KeyboardView: UIView {
         if g.state == .began { delegate?.keyboardViewDidToggleLM(self) }
     }
 
+    @objc private func keyDown() { UIDevice.current.playInputClick() }
     @objc private func spaceTapped() { delegate?.keyboardViewDidTapSpace(self) }
     @objc private func emojiTapped() {
         emojiPanel.reloadSections()

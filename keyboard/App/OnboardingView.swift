@@ -39,7 +39,12 @@ struct OnboardingView: View {
             Button { showDetails = true } label: {
                 VStack(spacing: 3) {
                     Text("3 more words right in every 100").font(.title3.weight(.semibold))
-                    Text("than Apple's keyboard, on the same swipes · see how").font(.footnote).foregroundStyle(.secondary)
+                    HStack(spacing: 3) {
+                        Text("than Apple's keyboard, on the same swipes")
+                        Text("· see how").foregroundStyle(Color.glyph)
+                        Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(Color.glyph)
+                    }
+                    .font(.footnote).foregroundStyle(.secondary)
                 }
             }
             .buttonStyle(.plain)
@@ -123,6 +128,7 @@ struct Steps: View {
 /// what the race records, and where the source is.
 struct DetailsSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("record.server") private var server = UploadConfig.defaultURL
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -148,6 +154,10 @@ struct DetailsSheet: View {
                             .font(.subheadline)
                         Text("build \(UploadConfig.build) · install id \(UserDefaults.standard.string(forKey: "race.session") ?? "assigned at first practice")")
                             .font(.caption2).foregroundStyle(.tertiary)
+                        if Debug.enabled {
+                            TextField("upload server", text: $server).font(.caption).autocorrectionDisabled().textInputAutocapitalization(.never)
+                                .textFieldStyle(.roundedBorder)
+                        }
                     }
                 }
                 .padding(24)

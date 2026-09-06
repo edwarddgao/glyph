@@ -2,7 +2,7 @@ import XCTest
 
 /// App Store screenshots, on an iPhone 17 Pro Max simulator (6.9", 1320×2868):
 ///   SWIPE_SHOTS=/path xcodegen generate && xcodebuild test ... -only-testing:GlyphUITests/StoreScreenshotTests
-/// 01 welcome · 02 practice mid-sentence · 03 sentence card · 04 the keyboard in a text field · 05 the benchmark table.
+/// 01 welcome · 02 practice mid-sentence · 03 round summary · 04 the keyboard in a text field · 05 the benchmark table.
 final class StoreScreenshotTests: GlyphUITests {
     func store(_ name: String) {
         let png = XCUIScreen.main.screenshot().pngRepresentation
@@ -46,34 +46,37 @@ final class StoreScreenshotTests: GlyphUITests {
 
         // 02 practice mid-sentence, 03 sentence card
         let r = XCUIApplication(); r.launchArguments = ["--race", "--race-set", "1", "--no-upload"]; r.launch()
-        let start = r.buttons["raceStart"]
-        XCTAssertTrue(start.waitForExistence(timeout: 10))
-        XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label BEGINSWITH 'Start'"), object: start)], timeout: 120)
-        start.tap()
         let pad = r.otherElements["racePad"], sentence = r.otherElements["raceSentence"]
-        XCTAssertTrue(pad.waitForExistence(timeout: 10) && sentence.waitForExistence(timeout: 10))
+        XCTAssertTrue(pad.waitForExistence(timeout: 120) && sentence.waitForExistence(timeout: 120))
+        sleep(4)   // let the language model finish loading so the verdicts use the shipped stack
         let f = pad.frame, margin = 20.0 / 3.0, gap = 6.0
         let center = Self.grid(left: f.minX + margin - gap / 2, top: f.minY + 42.47, pitch: (f.width - 2 * margin + gap) / 10)
-        let words = sentence.label.split(separator: " ").map(String.init)
-        for (i, word) in words.enumerated() {
-            try replay(word.lowercased(), center: center)
-            let ok = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value BEGINSWITH '\(i + 1)/'"), object: sentence)], timeout: 6) == .completed
-            if !ok { try replay(word.lowercased(), center: center); sleep(1) }
-            if i == 2 { sleep(1); store("02_practice") }
+        // Five sentences, no card in between: each finished line gives way to the next after a beat.
+        for s in 0..<5 {
+            _ = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value BEGINSWITH '0/'"), object: sentence)], timeout: 10)
+            let words = sentence.label.split(separator: " ").map(String.init)
+            for (i, word) in words.enumerated() {
+                try replay(word.lowercased(), center: center)
+                let ok = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value BEGINSWITH '\(i + 1)/'"), object: sentence)], timeout: 6) == .completed
+                if !ok { try replay(word.lowercased(), center: center); sleep(1) }
+                if s == 0 && i == 2 { sleep(1); store("02_practice") }
+            }
+            if s < 4 { sleep(2) }
         }
-        if r.buttons["raceNext"].waitForExistence(timeout: 10) { sleep(1); store("03_sentence") }
+        if r.buttons["raceAgain"].waitForExistence(timeout: 15) { sleep(1); store("03_sentence") }
         r.terminate()
     }
 
-    /// 04 the keyboard in a text field: Messages if the simulator has it, else the Try Glyph screen.
+    /// 04 the keyboard in a text field: Messages if the simulator has it, else the home screen's try-it field.
     func testKeyboardShot() throws {
         if try messagesShot() { return }
-        let app = XCUIApplication(); app.launchArguments = ["--bench"]; app.launch()
-        let field0 = app.textViews.firstMatch.exists ? app.textViews.firstMatch : app.textFields.firstMatch
-        XCTAssertTrue(field0.waitForExistence(timeout: 5)); field0.tap()
-        if !app.keyboards.buttons["Next keyboard"].waitForExistence(timeout: 3) { enableInSettings(); app.activate() }
-        let field = app.textViews.firstMatch.exists ? app.textViews.firstMatch : app.textFields.firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 5)); field.tap()
+        var app = XCUIApplication(); app.launchArguments = ["--onboarded", "--no-upload"]; app.launch()
+        if !app.textViews["homeTry"].waitForExistence(timeout: 5) {   // keyboard not enabled yet: the home screen shows the enable button
+            enableInSettings(); app.terminate()
+            app = XCUIApplication(); app.launchArguments = ["--onboarded", "--no-upload"]; app.launch()
+        }
+        let field = app.textViews["homeTry"].exists ? app.textViews["homeTry"] : app.textFields["homeTry"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "home try-it field"); field.tap()
         XCTAssertTrue(switchToSwipe(app), "Glyph keyboard did not come up")
         sleep(3)  // decoder load
         let bar = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'swipe a word'")).firstMatch.frame

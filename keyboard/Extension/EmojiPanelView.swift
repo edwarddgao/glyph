@@ -158,6 +158,7 @@ final class EmojiPanelView: UIView, UICollectionViewDataSource, UICollectionView
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         let e = sections[indexPath.section].emoji[indexPath.item]
         EmojiData.noteUse(e)
+        UIDevice.current.playInputClick()
         onEmoji?(e)
     }
 

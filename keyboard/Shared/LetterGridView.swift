@@ -16,6 +16,8 @@ final class LetterGridView: UIView {
     var onSwipe: (([TouchSample]) -> Void)?
     var onShift: (() -> Void)?
     var onBackspace: (() -> Void)?
+    /// Held delete, after a run of characters: take a whole word at a time (the system keyboard's escalation).
+    var onBackspaceWord: (() -> Void)?
 
     var shiftState: ShiftState = .off { didSet { updateShift() } }
 
@@ -51,6 +53,11 @@ final class LetterGridView: UIView {
                 back.layer.cornerRadius = NativeMetrics.cornerRadius
                 back.layer.cornerCurve = .continuous
                 back.isUserInteractionEnabled = false
+                // VoiceOver: each key is an element; activation lands a touch on
+                // it, which this view handles like any tap.
+                back.isAccessibilityElement = true
+                back.accessibilityLabel = String(ch)
+                back.accessibilityTraits = .keyboardKey
                 addSubview(back)
                 keyBacks[ch] = back
                 let l = UILabel()
@@ -68,6 +75,9 @@ final class LetterGridView: UIView {
         deleteKey.isUserInteractionEnabled = false
         shiftKey.accessibilityIdentifier = "shift"
         deleteKey.accessibilityIdentifier = "delete"
+        shiftKey.accessibilityLabel = "shift"
+        deleteKey.accessibilityLabel = "delete"
+        for k in [shiftKey, deleteKey] { k.isAccessibilityElement = true; k.accessibilityTraits = .keyboardKey }
         addSubview(shiftKey)
         addSubview(deleteKey)
         trail.fillColor = nil
@@ -213,15 +223,24 @@ final class LetterGridView: UIView {
         samples = []
         rawPoints = []
         startTime = t.timestamp
+        UIDevice.current.playInputClick()   // the system keyboard's click; honours the user's Keyboard Clicks setting
         switch zone(at: p) {
         case .shift:
             shiftKey.isHighlighted = true
         case .delete:
             deleteKey.isHighlighted = true
             onBackspace?()
+            // Hold: characters at 12/s after 0.45 s; after about a second of that, whole words at ~6/s.
             deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.45, repeats: false) { [weak self] _ in
+                var repeats = 0
                 self?.deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
-                    self?.onBackspace?()
+                    guard let self else { return }
+                    repeats += 1
+                    if repeats <= 12 { self.onBackspace?(); return }
+                    self.deleteTimer?.invalidate()
+                    self.deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.16, repeats: true) { [weak self] _ in
+                        self?.onBackspaceWord?()
+                    }
                 }
             }
         case .letter:
@@ -341,11 +360,13 @@ final class SymbolGridView: UIView {
         for _ in 0..<25 {
             let b = KeyButton(font: NativeMetrics.letterFont)
             b.addTarget(self, action: #selector(tapped(_:)), for: .touchUpInside)
+            b.addTarget(self, action: #selector(click), for: .touchDown)
             buttons.append(b)
             addSubview(b)
         }
         switchKey.addTarget(self, action: #selector(toggleLayer), for: .touchUpInside)
         deleteKey.addTarget(self, action: #selector(del), for: .touchUpInside)
+        for k in [switchKey, deleteKey] { k.addTarget(self, action: #selector(click), for: .touchDown) }
         addSubview(switchKey)
         addSubview(deleteKey)
         showNumbers()
@@ -383,6 +404,7 @@ final class SymbolGridView: UIView {
         deleteKey.frame = m.key(width: w, row: 2, column: 10 - 1.3, units: 1.3)
     }
 
+    @objc private func click() { UIDevice.current.playInputClick() }
     @objc private func tapped(_ b: UIButton) { if let t = b.title(for: .normal) { onText?(t) } }
     @objc private func del() { onBackspace?() }
     @objc private func toggleLayer() { showingSymbols.toggle(); relabel() }

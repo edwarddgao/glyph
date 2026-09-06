@@ -37,13 +37,15 @@ final class GestureReplayBench: XCTestCase {
 
     /// Long-press 123 until the Swipe status bar reports the wanted LM state.
     func setSwipeLM(_ app: XCUIApplication, enabled: Bool) {
+        // The LM state is the status label's accessibility value (the label itself only says "swipe a word").
         let status = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'swipe a word'")).firstMatch
         for _ in 0..<3 {
             guard status.waitForExistence(timeout: 20) else { return }
-            let off = status.label.contains("LM off")
+            let detail = (status.value as? String) ?? ""
+            let off = detail.contains("LM off")
             if off == !enabled { return }
-            if enabled && status.label.contains("LM loading") { sleep(2); continue }
-            app.buttons["layer"].press(forDuration: 1.0)
+            if enabled && detail.contains("LM loading") { sleep(2); continue }
+            app.buttons["layer"].press(forDuration: 2.3)
             sleep(1)
         }
     }

@@ -228,11 +228,11 @@ token, to the upload endpoint: by default the Cloudflare Worker in
 `upload-worker/` (`https://swipe-upload.swipe-edwardgao.workers.dev/save`,
 records into the R2 bucket `swipe-races`; `research/iphone/sync_race.py`
 pulls them down), or the LAN capture server `research/iphone/server.py`
-selected behind the gear icon. Pending files retry on the next race. The
+(a field in the info sheet that only the `--debug` launch argument shows). Pending files retry on the next race. The
 Worker checks the token, caps records at 2 MB and 60 per minute per IP, and
 serves `/list` and `/obj/<key>` to an admin token; tokens live in
 `research/iphone/.secrets/` (gitignored) and `App/UploadConfig.swift`.
-Transport security allows only HTTPS plus local networking. Anonymous per-install id, optional nickname, no other
+Transport security allows only HTTPS plus local networking. Anonymous per-install id, no other
 text is ever recorded. `research/iphone/race_to_capture.py` converts the
 records for the research tools and prints the per-player table. Launch
 arguments `--race` (open the game) and `--race-set N` (fixed sentences, in
@@ -245,7 +245,17 @@ order) serve the UI test `RaceUITests`.
 - Shift: tap toggles, double-tap locks. Auto-capitalizes at sentence start.
 - Double space after a swiped word → ". " (iOS convention). Punctuation
   typed right after a swiped word eats the auto-space.
+- Backspace right after a swipe removes the whole word and its space, as
+  Gboard and QuickPath do; after that it deletes by character. Held, it
+  repeats by character and after about a second steps up to whole words,
+  like the system keyboard.
 - Row 3 side insets are shift and delete (delete repeats on hold), exactly
   the canonical grid's 0.15 inset, so the letter geometry the decoder sees
   is the corpus geometry.
-- 123 / #+= toggle the native tap-only symbol layers.
+- 123 / #+= toggle the native tap-only symbol layers. Holding 123 for two
+  seconds switches the sentence LM off (the benchmark's `swipe-nolm` row); the
+  bar then reads "sentence model off · hold 123 to turn on" until it is held
+  again. Before the first swipe the bar says only "swipe a word"; memory and LM
+  load state are the label's accessibility value, which the benchmark reads.
+- Every key plays the system input click (no Full Access needed; haptics would
+  need it, so there are none).

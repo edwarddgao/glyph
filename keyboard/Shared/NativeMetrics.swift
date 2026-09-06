@@ -63,6 +63,12 @@ enum Palette {
     static var trail: UIColor { UIColor(red: 0.17, green: 0.44, blue: 0.94, alpha: 0.85) }
 }
 
+/// Lets `UIDevice.playInputClick()` sound from the extension's input view (no
+/// Full Access needed; haptics would need it, so the keyboard has none).
+extension UIInputView: UIInputViewAudioFeedback {
+    public var enableInputClicksWhenVisible: Bool { true }
+}
+
 /// A native-looking key: flat rounded rect, no shadow (iOS 26), text or SF Symbol.
 final class KeyButton: UIButton {
     var symbolName: String? { didSet { applySymbol() } }
