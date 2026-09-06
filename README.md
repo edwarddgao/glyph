@@ -4,7 +4,7 @@ An open-source swipe keyboard for iPhone that reads your finger better than
 the one built into the phone — and runs entirely on it.
 
 **Try it:** [TestFlight](https://testflight.apple.com/join/ZAXsVCWz) (iOS 17+;
-listed as "Glyph Swipe Keyboard").
+listed as "Glyph Type").
 
 Glyph decodes a swipe with a small transformer (1.7M parameters) trained on
 public swipe corpora, a 300k-word trie and a sentence language model
