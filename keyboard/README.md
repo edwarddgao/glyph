@@ -231,7 +231,11 @@ pulls them down), or the LAN capture server `research/iphone/server.py`
 (a field in the info sheet that only the `--debug` launch argument shows). Pending files retry on the next race. The
 Worker checks the token, caps records at 2 MB and 60 per minute per IP, and
 serves `/list` and `/obj/<key>` to an admin token; tokens live in
-`research/iphone/.secrets/` (gitignored) and `App/UploadConfig.swift`.
+`research/iphone/.secrets/` (gitignored) and reach the app only through
+`App/Info.plist`, which xcodegen writes at build time and git ignores.
+To rotate: `cd upload-worker && npx wrangler secret put UPLOAD_TOKEN`, put
+the same value in `.secrets/upload_token`, then deploy and release again —
+every installed build carries the old token and stops uploading.
 Transport security allows only HTTPS plus local networking. Anonymous per-install id, no other
 text is ever recorded. `research/iphone/race_to_capture.py` converts the
 records for the research tools and prints the per-player table. Launch
