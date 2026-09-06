@@ -48,14 +48,30 @@ whore slut nigga nigger faggot fag retard retarded rape raped rapist nazi hitler
 porn sex sexy sexual nude naked penis vagina orgasm cum horny damn hell crap piss pissed bastard douche jerk moron
 idiot stupid dumb terrorist bomb shoot shooting gun guns drugs cocaine heroin meth weed
 death deaths dead die died dying killer police cops arrested prison jail war torture abuse abused assault victim victims
-cancer disease tumor hospital funeral corpse blood bleeding hate hatred racist racism slave slavery""".split())
+cancer disease tumor hospital funeral corpse blood bleeding hate hatred racist racism slave slavery
+wtf fucks motherfucker boobs tits anal masturbate masturbation erection hooker prostitute stripper nudes
+pistol pistols rifle rifles weapon weapons ammo bullet bullets gunshot shooter shooters stab stabbed massacre execution
+executed beheaded lynch lynched hanged genocide holocaust auschwitz nazis
+jew jews jewish muslim muslims islam islamic christian christians christianity church bible god gods jesus christ allah
+quran koran hindu hindus buddhist buddhists sikh sikhs catholic catholics pope atheist atheists religion religious
+trump obama biden putin hillary clinton pelosi kamala republican republicans democrat democrats liberals conservatives
+election elections abortion abortions drunk alcohol vodka cigarettes marijuana overdose pregnant divorce cheating
+covid virus pandemic vaccine vaccines""".split())
+
+# Apostrophe-less contractions. The corpus pipeline strips punctuation, so
+# "she's" arrives as "shes": not a word, and the decoder — rightly — reads
+# "she", which the practice screen then paints red. Forms that are also real
+# words (its, well, were, ill, id, wed) stay.
+CONTRACTIONS = set("""im ive youre youve youd youll hes shes theyre theyve theyd theyll weve isnt arent wasnt werent
+dont doesnt didnt cant couldnt wont wouldnt shouldnt havent hasnt hadnt thats whats wheres whos hows lets aint yall
+theres heres itll itd whatd whered howd whens thered therell""".split())
 
 
 # People swipe words and tap abbreviations. A prompt must be something one would
 # swipe: one-letter tokens only "i"/"a" (tapped in the game), two-letter tokens
 # only real words, and nothing without a vowel (nfl, hc, btw, http…).
 TWO_LETTER = set("""am an as at be by do go he hi if in is it me my no of oh ok on or so to up us we
-ah eh ha uh um ya yo ye yes id im la ex ok""".split())
+ah eh ha uh um ya yo ye yes id la ex ok""".split())
 
 
 def swipeable(w: str) -> bool:
@@ -94,7 +110,7 @@ def main() -> None:
             if not (a.min_words <= len(words) <= a.max_words): continue
             if any(not re.fullmatch(r"[a-z]+", w) for w in words): continue
             if any(w not in lex for w in words): continue
-            if any(w in BLOCK for w in words): continue
+            if any(w in BLOCK or w in CONTRACTIONS for w in words): continue
             if any(not swipeable(w) for w in words): continue
             zs = [zipf_frequency(w, "en") for w in words]
             if min(zs) < a.min_zipf: continue
